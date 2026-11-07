@@ -37,7 +37,8 @@ mib2cfg/skin0/              YOUR EDITED FILES, at their place in skin0, for exam
                               mib2cfg/skin0/Data/0204080200/GenericCarAdjuster/AmbianceLight/0.gca
 ```
 
-You create `mib2cfg/skin0` yourself. The installer writes these:
+The release zip has `mib2cfg/skin0` empty, ready for your files; when you copy from the repository, create it
+yourself. The installer writes these:
 
 ```
 mib2cfg/backup/skin0/       the unit's own files, saved before they are first replaced. Keep it!
