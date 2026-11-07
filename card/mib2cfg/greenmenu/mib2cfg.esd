@@ -1,0 +1,54 @@
+###########################################################################################
+#
+# MIB2 Configurator: install edited skin0 files (images.mcf, Data/ zone files) or put the originals back
+# Installed by mib2cfg/mib2cfg.sh (mode menu) from an SD card or USB stick.
+#
+# Main -> MIB2 Configurator
+#
+###########################################################################################
+screen MIB2_Configurator Main
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "MIB2 Configurator: edited skin files from mib2cfg/skin0 on the SD card or stick"
+    poll    0
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "The unit's original files are kept in mib2cfg/backup. Log: mib2cfg/log.txt"
+    poll    0
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Wait for FINISHED, then reboot. Community tool, use at your own risk."
+    poll    0
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "__________________________________________________________________"
+    poll    0
+
+script
+    value   sys 1 0x0100 "/tsd/etc/persistence/esd/scripts/mib2cfg_check.sh"
+    label   "Check (read only)"
+
+script
+    value   sys 1 0x0100 "/tsd/etc/persistence/esd/scripts/mib2cfg_install.sh"
+    label   "Install edited files"
+
+script
+    value   sys 1 0x0100 "/tsd/etc/persistence/esd/scripts/mib2cfg_restore.sh"
+    label   "Restore original files"
+
+script
+    value   sys 1 0x0100 "/tsd/etc/persistence/esd/scripts/mib2cfg_reboot.sh"
+    label   "Reboot unit"
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "__________________________________________________________________"
+    poll    0
+
+script
+    value   sys 1 0x0100 "/tsd/etc/persistence/esd/scripts/mib2cfg_removemenu.sh"
+    label   "Remove this menu from the unit"

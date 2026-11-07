@@ -1,0 +1,24 @@
+# On a version tag (v1.2.3): zip the card folder's contents and publish them as a GitHub release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zip the card
+        run: |
+          cd card
+          chmod +x toolbox.sh mib2cfg/mib2cfg.sh mib2cfg/greenmenu/scripts/*.sh
+          zip -r -X "../mib2c-toolbox-${GITHUB_REF_NAME}.zip" .
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: mib2c-toolbox-${{ github.ref_name }}.zip
+          generate_release_notes: true
