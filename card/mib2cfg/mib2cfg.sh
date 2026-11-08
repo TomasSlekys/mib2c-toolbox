@@ -1,5 +1,6 @@
 #!/bin/ksh
-# MIB2 Configurator: put edited skin0 files on a MIB2 Standard (PQ/ZR) unit, or put the originals back.
+# MIB2 Configurator: put edited skin files (skin0 and the theme skins skin1..skin6) on a MIB2 Standard (PQ/ZR)
+# unit, or put the originals back.
 #
 # Standalone: it needs nothing on the unit but the Green Engineering Menu. It installs the car data files under
 # Data/ too (zone files with the ambient light points and touch areas), which the toolbox's Customization > Skins
@@ -19,7 +20,10 @@
 #   mib2cfg/skin0/...          the files to install, at their place in skin0, e.g.
 #                                mib2cfg/skin0/images.mcf
 #                                mib2cfg/skin0/Data/0204080200/GenericCarAdjuster/AmbianceLight/0.gca
-#   mib2cfg/backup/skin0/...   written here: each unit file as it was before this script first replaced it
+#   mib2cfg/skin1/ ... skin6/  the same for the theme skins (mainly images.mcf, images.res), e.g.
+#                                mib2cfg/skin3/images.mcf
+#                              an edit there applies to that theme only. Skins without files are skipped.
+#   mib2cfg/backup/skinN/...   written here: each unit file as it was before this script first replaced it
 #   mib2cfg/greenmenu/...      the screen (mib2cfg.esd) and its button scripts (scripts/mib2cfg_*.sh)
 #   mib2cfg/log.txt            what the last run did
 #
@@ -37,11 +41,15 @@
 # Every file is copied next to its target, compared, then renamed over it (see put), and compared again.
 # Restart the unit when it says FINISHED: the HMI keeps the old images.mcf open until then.
 
-ROOT=/tsd/hmi/Resources/skin0
+# The unit's skin folders: skin0 and the theme skins skin1..skin6 side by side.
+# MIB2CFG_RESOURCES, MIB2CFG_MEDIA and MIB2CFG_ESD are only for testing off the unit; leave them unset.
+RES=${MIB2CFG_RESOURCES:-/tsd/hmi/Resources}
+SKINS="skin0 skin1 skin2 skin3 skin4 skin5 skin6"
+ROOT=$RES/skin0
 
 # The drive this file is on: the first SD card or USB stick with mib2cfg/mib2cfg.sh.
 VOLUME=""
-for i in /media/mp00*; do
+for i in ${MIB2CFG_MEDIA:-/media/mp00*}; do
 	if [ -f $i/mib2cfg/mib2cfg.sh ]; then
 		VOLUME=$i
 		break
@@ -57,8 +65,22 @@ SRC=$CFG/skin0
 BAK=$CFG/backup/skin0
 LOG=$CFG/log.txt
 
-ESD=/tsd/etc/persistence/esd
+ESD=${MIB2CFG_ESD:-/tsd/etc/persistence/esd}
 MENU=$CFG/greenmenu
+
+# Points ROOT (unit), SRC (drive) and BAK (backup) at skin $1. PFX goes in front of file names in messages:
+# nothing for skin0, "skinN/" for a theme skin.
+useskin() {
+	ROOT=$RES/$1
+	SRC=$CFG/$1
+	BAK=$CFG/backup/$1
+	if [ "$1" = "skin0" ]; then PFX=""; else PFX="$1/"; fi
+}
+
+# True when folder $1 holds at least one file.
+hasfiles() {
+	[ -d "$1" ] && [ -n "$(find "$1" -type f 2>/dev/null | head -1)" ]
+}
 
 lower() {
 	echo "$1" | sed -e 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/' -e 's/[^a-z]//g'
@@ -223,36 +245,42 @@ if [ "$MODE" = "check" ]; then
 	say "$(df -k / 2>&1 | tail -1)"
 	say "$(df -k /tsd 2>&1 | tail -1)"
 	say ""
-	say "--- unit skin0"
-	if [ -d $ROOT ]; then
-		say "$ROOT is there"
-		say "$(ls -l $ROOT 2>&1)"
-	else
-		say "ERROR: $ROOT is missing"
-	fi
-	say ""
-	say "--- files install would replace (from mib2cfg/skin0)"
-	if [ -d $SRC ]; then
-		for f in $(find $SRC -type f); do
-			rel=${f#$SRC/}
-			dst=$ROOT/$rel
-			b=$BAK/$rel
-			if [ ! -f "$dst" ]; then
-				say "SKIP   $rel (not on the unit)"
-				continue
-			fi
-			if same "$f" "$dst"; then state="same as the unit"; else state="DIFFERS: would be replaced"; fi
-			if [ ! -f "$b" ]; then bstate="no backup yet: the unit's file would be backed up"
-			elif same "$b" "$dst"; then bstate="backup = the unit's file"
-			else bstate="backup is a different file (restore puts the backup back)"; fi
-			say "$rel"
-			say "    unit $(size "$dst") bytes, stick $(size "$f") bytes: $state"
-			say "    $bstate"
-		done
-	else
-		say "(no mib2cfg/skin0 folder on the stick)"
-	fi
-	say ""
+	# skin0 always; a theme skin only when the stick has files for it.
+	for s in $SKINS; do
+		useskin $s
+		if [ "$s" != "skin0" ] && ! hasfiles $SRC; then continue; fi
+		say "--- unit $s"
+		if [ -d $ROOT ]; then
+			say "$ROOT is there"
+			say "$(ls -l $ROOT 2>&1)"
+		else
+			say "ERROR: $ROOT is missing"
+		fi
+		say ""
+		say "--- files install would replace (from mib2cfg/$s)"
+		if [ -d $SRC ]; then
+			for f in $(find $SRC -type f); do
+				rel=${f#$SRC/}
+				dst=$ROOT/$rel
+				b=$BAK/$rel
+				if [ ! -f "$dst" ]; then
+					say "SKIP   $PFX$rel (not on the unit)"
+					continue
+				fi
+				if same "$f" "$dst"; then state="same as the unit"; else state="DIFFERS: would be replaced"; fi
+				if [ ! -f "$b" ]; then bstate="no backup yet: the unit's file would be backed up"
+				elif same "$b" "$dst"; then bstate="backup = the unit's file"
+				else bstate="backup is a different file (restore puts the backup back)"; fi
+				say "$PFX$rel"
+				say "    unit $(size "$dst") bytes, stick $(size "$f") bytes: $state"
+				say "    $bstate"
+			done
+		else
+			say "(no mib2cfg/skin0 folder on the stick)"
+		fi
+		say ""
+	done
+	useskin skin0
 	say "--- other copies of the car data on /tsd (zone files)"
 	for f in $(find $SRC -type f -name "*.gca" 2>/dev/null); do
 		name=${f##*/}
@@ -269,63 +297,85 @@ fi
 
 STEP=0
 if [ "$MODE" = "install" ]; then
-	if [ ! -d $SRC ]; then
-		say "ERROR: $SRC is missing. Put the edited files there."
+	COUNT=0
+	FOUND=""
+	for s in $SKINS; do
+		useskin $s
+		[ -d $SRC ] || continue
+		FOUND=1
+		COUNT=$((COUNT + $(count $SRC)))
+	done
+	if [ -z "$FOUND" ]; then
+		say "ERROR: $CFG/skin0 is missing. Put the edited files there."
 		exit 1
 	fi
-	COUNT=$(count $SRC)
 	say "Installing $COUNT file(s). Keep the ignition on and the stick in until it says FINISHED."
-	for f in $(find $SRC -type f); do
-		rel=${f#$SRC/}
-		dst=$ROOT/$rel
-		if [ ! -f "$dst" ]; then
-			say "SKIP   $rel (not on the unit)"
-			continue
-		fi
-		STEP=$((STEP+1))
-		say ""
-		say "($STEP/$COUNT) $rel"
-		if checked "$f" "$dst" "comparing with the unit's file"; then
-			say "same   $rel (already on the unit)"
-			continue
-		fi
-		b=$BAK/$rel
-		if [ ! -f "$b" ]; then
-			mkdir -p "${b%/*}"
-			say "       backing up the unit's ${rel##*/} to the stick..."
-			copy "$dst" "$b"
-			if ! checked "$dst" "$b"; then
-				rm -f "$b"
-				say "ERROR  $rel: could not back up the original; left as it was"
-				FAILED=$((FAILED+1))
+	for s in $SKINS; do
+		useskin $s
+		[ -d $SRC ] || continue
+		for f in $(find $SRC -type f); do
+			rel=${f#$SRC/}
+			dst=$ROOT/$rel
+			if [ ! -f "$dst" ]; then
+				say "SKIP   $PFX$rel (not on the unit)"
 				continue
 			fi
-			say "backup $rel"
-		fi
-		writable
-		put "$f" "$dst"
-		report $? "$rel" "Run restore."
+			STEP=$((STEP+1))
+			say ""
+			say "($STEP/$COUNT) $PFX$rel"
+			if checked "$f" "$dst" "comparing with the unit's file"; then
+				say "same   $PFX$rel (already on the unit)"
+				continue
+			fi
+			b=$BAK/$rel
+			if [ ! -f "$b" ]; then
+				mkdir -p "${b%/*}"
+				say "       backing up the unit's ${rel##*/} to the stick..."
+				copy "$dst" "$b"
+				if ! checked "$dst" "$b"; then
+					rm -f "$b"
+					say "ERROR  $PFX$rel: could not back up the original; left as it was"
+					FAILED=$((FAILED+1))
+					continue
+				fi
+				say "backup $PFX$rel"
+			fi
+			writable
+			put "$f" "$dst"
+			report $? "$PFX$rel" "Run restore."
+		done
 	done
 elif [ "$MODE" = "restore" ]; then
-	if [ ! -d $BAK ]; then
-		say "Nothing to restore: $BAK is missing."
+	COUNT=0
+	FOUND=""
+	for s in $SKINS; do
+		useskin $s
+		[ -d $BAK ] || continue
+		FOUND=1
+		COUNT=$((COUNT + $(count $BAK)))
+	done
+	if [ -z "$FOUND" ]; then
+		say "Nothing to restore: $CFG/backup/skin0 is missing."
 		exit 0
 	fi
-	COUNT=$(count $BAK)
 	say "Restoring $COUNT original file(s). Keep the ignition on and the stick in until it says FINISHED."
-	for b in $(find $BAK -type f); do
-		rel=${b#$BAK/}
-		dst=$ROOT/$rel
-		STEP=$((STEP+1))
-		say ""
-		say "($STEP/$COUNT) $rel"
-		if checked "$b" "$dst" "comparing with the unit's file"; then
-			say "same   $rel (already the original)"
-			continue
-		fi
-		writable
-		put "$b" "$dst"
-		report $? "$rel" "Try restore again."
+	for s in $SKINS; do
+		useskin $s
+		[ -d $BAK ] || continue
+		for b in $(find $BAK -type f); do
+			rel=${b#$BAK/}
+			dst=$ROOT/$rel
+			STEP=$((STEP+1))
+			say ""
+			say "($STEP/$COUNT) $PFX$rel"
+			if checked "$b" "$dst" "comparing with the unit's file"; then
+				say "same   $PFX$rel (already the original)"
+				continue
+			fi
+			writable
+			put "$b" "$dst"
+			report $? "$PFX$rel" "Try restore again."
+		done
 	done
 elif [ "$MODE" = "menu" ]; then
 	# Only our own files (mib2cfg*): the screen and its button scripts. Nothing else in the green menu is touched.

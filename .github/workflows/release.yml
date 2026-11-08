@@ -19,8 +19,8 @@ jobs:
       - name: Zip the card
         run: |
           cd card
-          # The empty folder for the user's edited files (git keeps no empty folders).
-          mkdir -p mib2cfg/skin0
+          # The empty folders for the user's edited files: skin0 and the theme skins (git keeps no empty folders).
+          mkdir -p mib2cfg/skin0 mib2cfg/skin1 mib2cfg/skin2 mib2cfg/skin3 mib2cfg/skin4 mib2cfg/skin5 mib2cfg/skin6
           chmod +x toolbox.sh mib2cfg/mib2cfg.sh mib2cfg/greenmenu/scripts/*.sh
           zip -r -X "../mib2c-toolbox-${GITHUB_REF_NAME}.zip" .
       - uses: softprops/action-gh-release@v2

@@ -1,6 +1,7 @@
 ###########################################################################################
 #
-# MIB2 Configurator: install edited skin0 files (images.mcf, Data/ zone files) or put the originals back
+# MIB2 Configurator: install edited skin files (skin0: images.mcf, Data/ zone files; theme skins skin1..skin6:
+# images.mcf, images.res) or put the originals back
 # Installed by mib2cfg/mib2cfg.sh (mode menu) from an SD card or USB stick.
 #
 # Main -> MIB2 Configurator
@@ -10,7 +11,7 @@ screen MIB2_Configurator Main
 
 keyValue
     value   String sys 0x00000000 0
-    label   "MIB2 Configurator: edited skin files from mib2cfg/skin0 on the SD card or stick"
+    label   "MIB2 Configurator: edited skin files from mib2cfg/skin0..skin6 on the SD card or stick"
     poll    0
 
 keyValue
