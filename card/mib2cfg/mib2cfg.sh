@@ -220,6 +220,88 @@ size() {
 	ls -l "$1" 2>/dev/null | awk '{print $5}'
 }
 
+# Free KB on the file system that holds $1: df -k's Available column (third from the end of its last line, which
+# also works when a long device name pushes the numbers onto a line of their own). Empty when it can't be read.
+freekb() {
+	df -k "$1" 2>/dev/null | tail -1 | awk '{ if (NF >= 4) print $(NF-2) }' | sed 's/[^0-9]//g'
+}
+
+# "N MB free", or that it is unknown, from a KB count that may be empty.
+freetext() {
+	if [ -n "$1" ]; then echo "$(($1 / 1024)) MB free"; else echo "free space unknown"; fi
+}
+
+# Kept free on top of what the copies need, in KB.
+MARGIN=4096
+
+# The space a run needs, in KB, for files from $1 ("SRC": the stick's skin folders, install; "BAK": the backups,
+# restore). NEEDUNIT: each file is first copied next to its target, so the unit needs the largest file once more,
+# plus everything the new files are bigger than the ones they replace. NEEDSTICK: the backups install still has to
+# make (unit files with no backup yet). Files already the same are counted too, so it errs on the safe side.
+needed() {
+	grow=0
+	peak=0
+	bak=0
+	for s in $SKINS; do
+		useskin $s
+		if [ "$1" = "BAK" ]; then from=$BAK; else from=$SRC; fi
+		[ -d $from ] || continue
+		for f in $(find $from -type f); do
+			rel=${f#$from/}
+			dst=$ROOT/$rel
+			[ -f "$dst" ] || continue
+			n=$(size "$f")
+			o=$(size "$dst")
+			[ $n -gt $peak ] && peak=$n
+			[ $n -gt $o ] && grow=$((grow + n - o))
+			[ "$1" = "SRC" ] && [ ! -f "$BAK/$rel" ] && bak=$((bak + o))
+		done
+	done
+	NEEDUNIT=$(( (grow + peak + 1023) / 1024 + MARGIN ))
+	NEEDSTICK=$(( (bak + 1023) / 1024 + MARGIN ))
+}
+
+# Copies an interrupted run left on the unit (power lost while copying): FILE.mib2cfg-new next to a skin file.
+leftovers() {
+	find $RES -type f -name "*.mib2cfg-new" 2>/dev/null
+}
+
+# Removes those copies; they are never the unit's own files.
+cleanleftovers() {
+	for f in $(leftovers); do
+		writable
+		rm -f "$f"
+		if [ -f "$f" ]; then say "ERROR  could not remove the leftover copy $f"; else say "removed the leftover copy $f"; fi
+	done
+}
+
+# Stops before anything is copied when the unit or the stick is short of space ($1: what is being done).
+spacecheck() {
+	needed $2
+	free=$(freekb $RES)
+	sfree=$(freekb $CFG)
+	say "Space on the unit: needs $((NEEDUNIT / 1024)) MB, $(freetext "$free")"
+	if [ "$2" = "SRC" ]; then
+		say "Space on the stick for backups: needs $((NEEDSTICK / 1024)) MB, $(freetext "$sfree")"
+	fi
+	short=""
+	if [ -n "$free" ] && [ $free -lt $NEEDUNIT ]; then short="the unit has $((free / 1024)) MB free, $((NEEDUNIT / 1024)) MB are needed"; fi
+	if [ "$2" = "SRC" ] && [ -n "$sfree" ] && [ $sfree -lt $NEEDSTICK ]; then short="${short:+$short; }the stick has $((sfree / 1024)) MB free, $((NEEDSTICK / 1024)) MB are needed for the backups"; fi
+	if [ -z "$free" ]; then say "WARNING: could not read the unit's free space; going on (a copy that does not fit is removed and the unit's file kept)"; fi
+	[ -z "$short" ] && return 0
+	if [ -n "$RW" ]; then
+		sync
+		mount -t qnx6 -o remount,ro /dev/hd0t177 /
+	fi
+	say ""
+	say "=================================================="
+	say "  $1 STOPPED: NOT ENOUGH SPACE"
+	say "  $short."
+	say "  Nothing was copied. Free some space and try again."
+	say "=================================================="
+	exit 1
+}
+
 if [ "$MODE" = "check" ]; then
 	say "Read only: nothing on the unit is changed."
 	say ""
@@ -280,6 +362,17 @@ if [ "$MODE" = "check" ]; then
 		fi
 		say ""
 	done
+	say "--- space"
+	needed SRC
+	free=$(freekb $RES)
+	sfree=$(freekb $CFG)
+	say "unit: install needs $((NEEDUNIT / 1024)) MB, $(freetext "$free")"
+	say "stick: backups need $((NEEDSTICK / 1024)) MB, $(freetext "$sfree")"
+	say ""
+	say "--- leftover copies from interrupted runs (install and restore remove them)"
+	l=$(leftovers)
+	if [ -n "$l" ]; then say "$l"; else say "none"; fi
+	say ""
 	useskin skin0
 	say "--- other copies of the car data on /tsd (zone files)"
 	for f in $(find $SRC -type f -name "*.gca" 2>/dev/null); do
@@ -309,6 +402,9 @@ if [ "$MODE" = "install" ]; then
 		say "ERROR: $CFG/skin0 is missing. Put the edited files there."
 		exit 1
 	fi
+	cleanleftovers
+	spacecheck INSTALL SRC
+	say ""
 	say "Installing $COUNT file(s). Keep the ignition on and the stick in until it says FINISHED."
 	for s in $SKINS; do
 		useskin $s
@@ -358,6 +454,9 @@ elif [ "$MODE" = "restore" ]; then
 		say "Nothing to restore: $CFG/backup/skin0 is missing."
 		exit 0
 	fi
+	cleanleftovers
+	spacecheck RESTORE BAK
+	say ""
 	say "Restoring $COUNT original file(s). Keep the ignition on and the stick in until it says FINISHED."
 	for s in $SKINS; do
 		useskin $s

@@ -100,6 +100,16 @@ from `mib2cfg/backup/skin0` … `skin6` back, so use the card that holds the bac
 - **Restore** copies every backed-up file back. The backup stays on the card.
 - Each file is copied next to its target as `<name>.mib2cfg-new`, compared, renamed over the target and compared
   again. The system partition is remounted read-write only for the copy and read-only again afterwards.
+- **Space:** before copying anything, install and restore work out what they need and stop with "NOT ENOUGH
+  SPACE" (nothing copied) when the unit or, for the backups, the card is short. The unit needs the largest file
+  once more (the copy next to its target) plus whatever the new files are bigger than the old ones, plus 4 MB.
+  If the free space can't be read, it goes on with a warning: a copy that doesn't fit is removed and the unit's
+  file kept.
+- **Nothing left behind:** the only files that stay on the unit are the replaced files themselves (same names,
+  same places) and the menu's own files (`mib2cfg.esd` and `scripts/mib2cfg_*.sh` in the green menu folder,
+  a few KB; Remove menu deletes them). Backups go to the card, never the unit. A failed copy is deleted at once;
+  a `<name>.mib2cfg-new` left by a power cut mid-copy is listed by Check and removed by the next install or
+  restore. Check also shows the free space and what an install would need.
 - `toolbox.sh` runs the installer with the mode in `mib2cfg/mode`: `check` (the default), `install`, `restore`,
   `menu` or `removemenu`. When started this way, the installer sets the next mode itself: after an install the
   next run restores, and after a clean restore or menu change it only checks. The menu buttons always do what
