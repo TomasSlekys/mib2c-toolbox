@@ -16,7 +16,7 @@ It adds its own screen to the Green Engineering Menu, **Main › MIB2 Configurat
 - **Remove this menu from the unit.**
 
 > Community tool, not affiliated with Volkswagen. Use it at your own risk and keep your own dump of the unit.
-> Tested so far: the Check mode on a MIB2 STD2 PQ unit (QNX 6.5).
+> Only tested on a VW MIB2 STD2 PQ unit with firmware 0480T (QNX 6.5). Other units and firmware versions are untested.
 
 ## Download
 
