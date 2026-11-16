@@ -4,7 +4,7 @@
 # stubs that come first in PATH: mount (lists / with a read-only or writable state, remounts by changing the fake
 # unit's permissions, can be made to fail), df (set free space), shutdown and slay (record that they ran), sleep
 # (instant) and wc, dd, date (missing on the unit, so they exit 127).
-# SH picks the shell that runs mib2cfg.sh: mksh (default) or busybox.
+# SH picks the shell that runs mib2cfg.sh: mksh (default), pdksh or busybox.
 
 SH=${SH:-mksh}
 case "$SH" in busybox) RUN="busybox sh" ;; *) RUN=$SH ;; esac

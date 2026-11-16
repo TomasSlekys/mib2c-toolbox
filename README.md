@@ -87,8 +87,8 @@ card per unit" below), and only one such card in the unit at a time.
 **After a menu install or update, press Check once** before the first install. Every self-test line says `ok`
 or `BAD:`; a needed command that is missing says `BAD: … missing`. If any line says **BAD** or **WARNING**, don't
 install: send the newest check log (`mib2cfg/logs/NNNN-check.log` with the highest number). The installer is
-tested off the unit with mksh and busybox sh, and Check confirms the unit's own shell (PD KSH 5.2.14) and commands
-behave the same.
+tested off the unit with the unit's own shell (PD KSH 5.2.14), mksh and busybox sh, and Check confirms the unit's
+commands behave the same.
 
 ## Updating the menu
 
@@ -218,8 +218,9 @@ the green menu (and with it Restore) can't be reached either. Before your first 
 
 ## Testing off the unit
 
-`tests/run.sh` runs the installer against a fake unit and card in Docker (mksh, the closest relative of the
-unit's PD KSH; `tests/run.sh busybox` uses busybox sh). The cases cover install, restore, reboot rules, the file
+`tests/run.sh [mksh|pdksh|busybox]` runs the installer against a fake unit and card in Docker: `pdksh` is the
+unit's own shell, PD KSH v5.2.14 (Debian's `pdksh_5.2.14-25`, pinned by URL and sha256 in `tests/Dockerfile`),
+`mksh` (the default) its closest maintained relative, `busybox` busybox sh. Every case passes on all three. The cases cover install, restore, reboot rules, the file
 checks, names with spaces, mode files with CR/BOM, two cards, a read-only card, mount failures, low space, the
 lock, leftovers, partial / damaged backups, another card or firmware, the menu install and update (older menu
 updated, downgrade and CRLF refused, every button script present), every "… and reboot" path (reboots only after a
@@ -229,9 +230,9 @@ refused, a good one recorded), a firmware update past the stop, forgetcard, the 
 stale and live locks (also for the Reboot unit button), two writing runs at once, a file over 8 MB (the copy with
 a progress bar), Check's self-tests and the log numbering.
 
-**Pending:** the unit's own shell, PD KSH 5.2.14, hasn't been run off the unit; running a pdksh 5.2.14 binary in
-the tests waits for the maintainer's OK. Until then Check on the car is the confirmation.
-Check on the unit then confirms the pdksh details (`print`, `typeset -Z`, `trap EXIT`, `awk -v`, cmp's format).
+The x86 pdksh build is the same version as the unit's (QNX, ARM), not the same binary, and the unit's commands
+(`cmp`, `df`, `mount`, `head`) are stubs here, so Check on the car still confirms the command details (`awk -v`,
+cmp's output format, `head -c`) before the first install.
 
 ## License
 
