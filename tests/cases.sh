@@ -18,6 +18,7 @@ ok() {
 
 mcf() { printf '\211MCF\r\n\032\n%s' "$1"; }
 res() { printf '\005\000\000\000SkrX%s' "$1"; }
+boot() { printf 'SCRT\000\001\000\000%s' "$1"; }
 pad() { i=0; s=""; while [ $i -lt 40 ]; do s="$s$1"; i=$((i+1)); done; printf '%s' "$s"; }
 
 setup() {
@@ -33,7 +34,9 @@ setup() {
 	printf 'gca-orig' > "$U/Resources/skin0/Data/x/0.gca"
 	mcf "$(pad orig1)" > "$U/Resources/skin1/images.mcf"
 	res "$(pad r1)" > "$U/Resources/skin1/images.res"
-	printf 'boot' > "$U/startanim/startup_0.boot"
+	boot "$(pad sa0)" > "$U/startanim/startup_0.boot"
+	boot "$(pad sa0)" > "$T/origsa0"
+	boot "$(pad sa1)" > "$U/startanim/startup_1.boot"
 	printf 'firmware-1' > "$U/hmi/tsd.mibstd2.hmi.ifs"
 	cp -r /repo/card/. "$C/"
 	mkdir -p "$C/mib2cfg/skin0"
@@ -54,8 +57,10 @@ EOF
 	cat > "$T/stub/df" <<EOF
 #!/bin/sh
 case "\$2" in $T/media*) f=\$(cat $T/cardfree) ;; *) f=\$(cat $T/unitfree) ;; esac
+mp=/
+case "\$2" in *startanim*) [ -f $T/startanim-mnt ] && mp=\$(cat $T/startanim-mnt) ;; esac
 echo "Filesystem 1K-blocks Used Available Use% Mounted on"
-echo "/dev/x 9999999 1 \$f 1% /"
+echo "/dev/x 9999999 1 \$f 1% \$mp"
 EOF
 	printf '#!/bin/sh\ntouch %s/shutdown-called\n' "$T" > "$T/stub/shutdown"
 	printf '#!/bin/sh\ntouch %s/slay-called\n' "$T" > "$T/stub/slay"
@@ -85,7 +90,7 @@ ok "check exits 0" '[ $RC -eq 0 ]'
 ok "check writes a numbered log" '[ -f $C/mib2cfg/logs/0001-check.log ] && [ -f $C/mib2cfg/log.txt ]'
 ok "check never remounts" '! grep -q remount $T/mount.log 2>/dev/null'
 ok "check lists the file" 'grepq "DIFFERS: would be replaced"'
-ok "check shows the menu version" 'grepq "card menu 0.3.0"'
+ok "check shows the menu version" 'grepq "card menu 0.4.0"'
 
 # --- install, then restore
 setup install
@@ -262,7 +267,7 @@ chmod -R u+w "$U"; sed -i 's/^# mib2cfg-version .*/# mib2cfg-version 9.0.0/' "$U
 run menu
 ok "menu refuses a downgrade" '[ $RC -eq 1 ] && grepq "is newer"'
 run menu force
-ok "menu force downgrades" '[ $RC -eq 0 ] && grep -q "0.3.0" $U/esd/mib2cfg.esd'
+ok "menu force downgrades" '[ $RC -eq 0 ] && grep -q "0.4.0" $U/esd/mib2cfg.esd'
 printf '#!/bin/ksh\r\necho x\r\n' > "$C/mib2cfg/greenmenu/scripts/mib2cfg_check.sh"
 run menu
 ok "menu refuses CRLF files" '[ $RC -eq 1 ] && grepq "Windows line endings"'
@@ -279,6 +284,116 @@ run check
 ok "log number follows the highest NNNN log" '[ -f $C/mib2cfg/logs/0008-check.log ]'
 ( run check ) & ( run check ) & wait
 ok "two runs at once get two logs" '[ "$(ls $C/mib2cfg/logs | grep -c check.log)" = 3 ]'
+
+# --- the menu: update from the card (an older unit menu gets the new buttons)
+setup menuupdate
+run menu
+chmod -R u+w "$U"; sed -i 's/^# mib2cfg-version .*/# mib2cfg-version 0.3.0/' "$U/esd/mib2cfg.esd"; rm -f "$U/esd/scripts/mib2cfg_startup.sh" "$U/esd/scripts/mib2cfg_updatemenu.sh"; chmod -R a-w "$U"
+run menu
+ok "update menu: older unit menu updated" '[ $RC -eq 0 ] && grep -q "^# mib2cfg-version 0.4.0" $U/esd/mib2cfg.esd && grepq "Close and reopen the green menu"'
+ok "update menu: new buttons are there and runnable" '[ -x $U/esd/scripts/mib2cfg_startup.sh ] && [ -x $U/esd/scripts/mib2cfg_updatemenu.sh ] && grep -q "Update this menu from the card" $U/esd/mib2cfg.esd'
+ok "update menu: every button the screen names exists" 'for b in $(sed -n "s/.*scripts\/\(mib2cfg_[a-z]*\.sh\).*/\1/p" $U/esd/mib2cfg.esd); do [ -x $U/esd/scripts/$b ] || exit 1; done'
+ok "update menu: no reboot, no pending flag" '[ ! -f $T/shutdown-called ] && [ ! -f $T/tmp/mib2cfg.reboot-pending ]'
+run menu reboot
+ok "menu reboot: menu never reboots" '[ ! -f $T/shutdown-called ]'
+ok "every menu file has Unix line endings and the ksh line" 'for f in /repo/card/mib2cfg/greenmenu/scripts/*.sh /repo/card/toolbox.sh; do [ "$(head -1 $f)" = "#!/bin/ksh" ] || exit 1; ! grep -q "$(printf "\r")" $f || exit 1; done'
+setup menucrlf
+printf '#!/bin/ksh\r\necho x\r\n' > "$C/mib2cfg/greenmenu/scripts/mib2cfg_updatemenu.sh"
+run menu
+ok "update menu: CRLF button refused, nothing installed" '[ $RC -eq 1 ] && grepq "Windows line endings" && [ ! -f $U/esd/mib2cfg.esd ]'
+setup menudown
+run menu
+chmod -R u+w "$U"; sed -i 's/^# mib2cfg-version .*/# mib2cfg-version 0.5.0/' "$U/esd/mib2cfg.esd"; chmod -R a-w "$U"
+run menu
+ok "update menu: downgrade refused" '[ $RC -eq 1 ] && grepq "is newer" && grep -q "0.5.0" $U/esd/mib2cfg.esd'
+
+# --- restore reboot
+setup restorereboot
+edit0
+run install
+reboot_sim
+run restore reboot
+ok "restore reboot: clean restore reboots" '[ $RC -eq 0 ] && [ -f $T/shutdown-called ] && cmp -s $T/orig0 $U/Resources/skin0/images.mcf'
+setup restorerebootnothing
+run restore reboot
+ok "restore reboot with no backup: no reboot" '[ $RC -eq 3 ] && [ ! -f $T/shutdown-called ]'
+
+# --- startup screens
+sa() { mkdir -p "$C/mib2cfg/startanim"; boot "$(pad $2)" > "$C/mib2cfg/startanim/$1"; }
+setup startup
+sa startup_0.boot new0
+sa startup_5.boot new5
+printf 'x' > "$C/mib2cfg/startanim/readme.txt"
+edit0
+run startup
+ok "startup exits 0" '[ $RC -eq 0 ] && grepq "STARTUP SCREENS INSTALL FINISHED"'
+ok "startup replaced startup_0.boot" 'cmp -s $C/mib2cfg/startanim/startup_0.boot $U/startanim/startup_0.boot'
+ok "startup left startup_1.boot alone" '[ "$(cat $U/startanim/startup_1.boot)" = "$(boot "$(pad sa1)")" ]'
+ok "startup never adds files" '[ ! -f $U/startanim/startup_5.boot ] && grepq "SKIP   startanim/startup_5.boot (not on the unit"'
+ok "startup skips other names" '[ ! -f $U/startanim/readme.txt ] && grepq "SKIP   startanim/readme.txt (only startup_N.boot"'
+ok "startup backup in backup/startanim" 'cmp -s $T/origsa0 $C/mib2cfg/backup/startanim/startup_0.boot && [ ! -w $C/mib2cfg/backup/startanim/startup_0.boot ]'
+ok "startup: MANIFEST and marker" 'grep -q "^startanim/startup_0.boot " $C/mib2cfg/backup/MANIFEST && grep -q "^file startanim/startup_0.boot" $U/esd/mib2cfg.state'
+ok "startup didn't touch the skins" '! cmp -s $C/mib2cfg/skin0/images.mcf $U/Resources/skin0/images.mcf && [ ! -d $C/mib2cfg/backup/skin0 ]'
+ok "startup: read only again, no reboot without the word" '! isrw && [ ! -f $T/shutdown-called ]'
+reboot_sim
+run restore
+ok "skin restore doesn't restore startup screens" '[ $RC -eq 3 ] && cmp -s $C/mib2cfg/startanim/startup_0.boot $U/startanim/startup_0.boot'
+run startuprestore
+ok "startuprestore brings the original back" '[ $RC -eq 0 ] && cmp -s $T/origsa0 $U/startanim/startup_0.boot && grepq "STARTUP SCREENS RESTORE FINISHED"'
+setup startupreboot
+sa startup_0.boot new0
+run startup reboot
+ok "startup reboot: clean run reboots" '[ $RC -eq 0 ] && [ -f $T/shutdown-called ]'
+setup startuprebootnothing
+cp "$T/origsa0" "$C/mib2cfg/startanim/startup_0.boot" 2>/dev/null || { mkdir -p "$C/mib2cfg/startanim"; cp "$T/origsa0" "$C/mib2cfg/startanim/startup_0.boot"; }
+run startup reboot
+ok "startup reboot with nothing to change: no reboot" '[ $RC -eq 3 ] && [ ! -f $T/shutdown-called ]'
+setup startuprestorereboot
+sa startup_0.boot new0
+run startup
+reboot_sim
+run startuprestore reboot
+ok "startuprestore reboot: reboots after a clean restore" '[ $RC -eq 0 ] && [ -f $T/shutdown-called ]'
+setup startupheader
+mkdir -p "$C/mib2cfg/startanim"; printf 'XCRT\000\001\000\000%s' "$(pad new0)" > "$C/mib2cfg/startanim/startup_0.boot"
+run startup reboot
+ok "startup: wrong header refused, no reboot" '[ $RC -eq 2 ] && grepq "SCRT" && cmp -s $T/origsa0 $U/startanim/startup_0.boot && [ ! -f $T/shutdown-called ]'
+setup startupsize
+mkdir -p "$C/mib2cfg/startanim"; boot "x" > "$C/mib2cfg/startanim/startup_0.boot"
+run startup
+ok "startup: much smaller .boot refused" '[ $RC -eq 2 ] && grepq "less than half"'
+setup startupleft
+sa startup_0.boot new0
+chmod -R u+w "$U"; printf 'x' > "$U/startanim/startup_0.boot.mib2cfg-new.77"; chmod -R a-w "$U"
+run startup
+ok "startup removes leftover copies in startanim" '[ $RC -eq 0 ] && [ ! -f $U/startanim/startup_0.boot.mib2cfg-new.77 ]'
+setup startuppart
+sa startup_0.boot new0
+echo /tsd/other > "$T/startanim-mnt"
+run startup
+ok "startup: startanim on another partition refused, nothing written" '[ $RC -eq 1 ] && grepq "OTHER PARTITION" && cmp -s $T/origsa0 $U/startanim/startup_0.boot && ! grep -q remount $T/mount.log 2>/dev/null'
+run check
+ok "check warns about the other partition" '[ $RC -eq 0 ] && grepq "WARNING: startanim is on /tsd/other"'
+setup startupnone
+run startup
+ok "startup without mib2cfg/startanim: stops" '[ $RC -eq 1 ] && grepq "startanim is missing"'
+run startuprestore
+ok "startuprestore without backups: nothing to do" '[ $RC -eq 3 ]'
+setup startuptools
+sa startup_0.boot new0
+printf 'startup\n' > "$C/mib2cfg/mode"
+run
+ok "Tools route: after startup the next run is startuprestore" '[ $RC -eq 0 ] && [ "$(cat $C/mib2cfg/mode)" = startuprestore ]'
+setup startupcheck
+sa startup_0.boot new0
+run check
+ok "check lists the startup screens" 'grepq "files startup would replace (from mib2cfg/startanim)" && grepq "startanim/startup_0.boot" && grepq "startanim.s file system: /, the same as /"'
+setup startuppending
+edit0
+sa startup_0.boot new0
+run install
+run startup
+ok "startup after an install waits for the reboot" '[ $RC -eq 1 ] && grepq "has not rebooted"'
 
 echo "$SH: $PASS passed, $FAILS failed"
 [ $FAILS -eq 0 ]
