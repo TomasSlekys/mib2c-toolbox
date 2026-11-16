@@ -1,5 +1,5 @@
 #!/bin/ksh
-# mib2cfg-version 0.3.0
+# mib2cfg-version 0.4.0
 # MIB2 Configurator: put edited skin files (skin0 and the theme skins skin1..skin6) on a MIB2 Standard (PQ/ZR)
 # unit, or put the originals back.
 #
@@ -17,14 +17,16 @@
 #   toolbox.sh                 launcher for the toolbox's Tools route (first install of the screen)
 #   mib2cfg/mib2cfg.sh         this file
 #   mib2cfg/mode               the mode when started without one: check (the default, read only), install,
-#                              restore, menu or removemenu
+#                              restore, startup, startuprestore, menu or removemenu
 #   mib2cfg/skin0/...          the files to install, at their place in skin0, e.g.
 #                                mib2cfg/skin0/images.mcf
 #                                mib2cfg/skin0/Data/0204080200/GenericCarAdjuster/AmbianceLight/0.gca
 #   mib2cfg/skin1/ ... skin6/  the same for the theme skins (mainly images.mcf, images.res), e.g.
 #                                mib2cfg/skin3/images.mcf
 #                              an edit there applies to that theme only. Skins without files are skipped.
+#   mib2cfg/startanim/         startup screens to install: startup_N.boot files for /tsd/etc/startanim
 #   mib2cfg/backup/skinN/...   written here: each unit file as it was before this script first replaced it
+#   mib2cfg/backup/startanim/  the same for the startup screens
 #   mib2cfg/backup/MANIFEST    size (and cksum) of every backup, checked before a restore
 #   mib2cfg/backup/card.id     this card's id; the unit keeps it in its marker (mib2cfg.state, next to the menu)
 #   mib2cfg/backup/unit.txt    the unit's firmware fingerprint when the first backup was made
@@ -39,14 +41,18 @@
 #             backup (as .part, compared, renamed, flushed); that copy is never overwritten, so it stays the unit's
 #             own file however often you install.
 # restore:    copies every backed-up file back (each checked against MANIFEST first). The backup stays on the drive.
+# startup:    like install, for the startup screens: mib2cfg/startanim/startup_N.boot over /tsd/etc/startanim's files
+#             of the same name (only those that exist there; other names are skipped), backed up to backup/startanim.
+# startuprestore: puts the backed-up startup screens back. Skin and startup backups never cross.
 # menu:       adds or updates only this script's own menu files, mib2cfg*, in /tsd/etc/persistence/esd, and removes
 #             our button scripts the card no longer has; reopen the green menu afterwards. An older menu than the
 #             one on the unit is refused unless the mode is "menu force".
 # removemenu: deletes those files again (the screen disappears after reopening the green menu). The small marker
 #             mib2cfg.state stays: it says which card holds this unit's original files.
-# A second word "reboot" ("install reboot", "restore reboot") restarts the unit at the end, but only when every
+# A second word "reboot" ("install reboot", "restore reboot", "startup reboot", "startuprestore reboot") restarts the unit at the end, but only when every
 # file was copied, nothing failed and the system partition is read only again.
-# Started without a mode the script sets the next one itself: after an install the next run restores, after a
+# Started without a mode the script sets the next one itself: after an install the next run restores (after a
+# startup install: startuprestore), after a
 # clean restore or menu change it only checks. The menu buttons always do what they say and leave mib2cfg/mode.
 # Every file is copied next to its target, compared, then renamed over it (see put), and compared again.
 # Restart the unit when it says FINISHED: the HMI keeps the old images.mcf open until then.
@@ -54,7 +60,7 @@
 # Exit codes: 0 files changed cleanly (check: finished), 1 stopped before copying anything or a run-wide error,
 # 2 some files failed, 3 nothing needed changing.
 
-VERSION=0.3.0
+VERSION=0.4.0
 
 # Everything that went to stderr shows in the green menu too.
 exec 2>&1
@@ -128,6 +134,20 @@ useskin() {
 	if [ "$1" = "skin0" ]; then PFX=""; else PFX="$1/"; fi
 }
 
+# The same for the startup screens: ROOT /tsd/etc/startanim, SRC mib2cfg/startanim, BAK backup/startanim.
+usestart() {
+	SKIN=startanim
+	ROOT=$STARTANIM
+	SRC=$CFG/startanim
+	BAK=$BAKROOT/startanim
+	PFX="startanim/"
+}
+
+# useskin or usestart for a set name (skin0..skin6 or startanim).
+useset() {
+	if [ "$1" = "startanim" ]; then usestart; else useskin "$1"; fi
+}
+
 lower() {
 	out "$1" | sed -e 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/' -e 's/[^a-z]//g'
 }
@@ -151,17 +171,25 @@ case "$MODE" in
 installreboot) MODE=install; REBOOT=1 ;;
 restorereboot) MODE=restore; REBOOT=1 ;;
 menuforce) MODE=menu; FORCE=1 ;;
+startupreboot) MODE=startup; REBOOT=1 ;;
+startuprestorereboot) MODE=startuprestore; REBOOT=1 ;;
 esac
 case "$WORD2" in
 reboot) REBOOT=1 ;;
 force) FORCE=1 ;;
 esac
 case "$MODE" in
-check|install|restore|menu|removemenu) ;;
+check|install|restore|startup|startuprestore|menu|removemenu) ;;
 *)
-	out "ERROR: unknown mode '$MODE' (check, install, restore, menu or removemenu). Nothing was changed."
+	out "ERROR: unknown mode '$MODE' (check, install, restore, startup, startuprestore, menu or removemenu). Nothing was changed."
 	exit 1
 	;;
+esac
+
+# What a writing run goes through: the skins, or (startup modes) the startup screens; UNITROOT is where it writes.
+case "$MODE" in
+startup|startuprestore) SETS=startanim; UNITROOT=$STARTANIM; STARTMODE=1 ;;
+*) SETS=$SKINS; UNITROOT=$RES; STARTMODE="" ;;
 esac
 
 # --- The logs on the card: logs/NNNN-mode.log for this run (never overwritten) and log.txt, the latest run.
@@ -236,6 +264,13 @@ size() {
 	s=$(ls -l "$1" 2>/dev/null | awk '{print $5}')
 	case "$s" in ''|*[!0-9]*) s=0 ;; esac
 	out "$s"
+}
+
+# The first 4 bytes of $1 when head -c works on this unit (empty otherwise, and then the check is skipped).
+HEADC=""
+[ "$(out abc | head -c 1 2>/dev/null)" = "a" ] && HEADC=1
+magic() {
+	[ -n "$HEADC" ] && head -c 4 "$1" 2>/dev/null
 }
 
 # The cksum of $1, or - when the unit has no cksum.
@@ -452,8 +487,8 @@ needed() {
 	newsum=0
 	peak=0
 	bak=0
-	for s in $SKINS; do
-		useskin $s
+	for s in $SETS; do
+		useset $s
 		if [ "$1" = "BAK" ]; then from=$BAK; else from=$SRC; fi
 		[ -d "$from" ] || continue
 		newlist "$from"
@@ -496,7 +531,7 @@ cleanleftovers() {
 # Stops before anything is copied when the unit or the stick is short of space ($1: what is being done).
 spacecheck() {
 	needed $2
-	free=$(freekb "$RES")
+	free=$(freekb "$UNITROOT")
 	sfree=$(freekb "$CFG")
 	say "Space on the unit: needs $((NEEDUNIT / 1024)) MB, $(freetext "$free")"
 	if [ "$2" = "SRC" ]; then
@@ -533,6 +568,11 @@ invalid() {
 	vn=$(size "$vf")
 	vo=$(size "$vd")
 	if [ "$vn" -eq 0 ]; then out "the new file is empty"; return; fi
+	case "${vrel##*/}" in
+	*.boot)
+		if [ -n "$HEADC" ] && [ "$(magic "$vf")" != "SCRT" ]; then out "it doesn't start with SCRT (not a startup_N.boot file)"; return; fi
+		;;
+	esac
 	case "${vrel##*/}" in
 	images.mcf|images.res|*.boot)
 		p=$(firstdiff "$vf" "$vd")
@@ -666,6 +706,46 @@ manifestbad() {
 	if [ "$mc" != "-" ] && have cksum && [ "$(sum "$1")" != "$mc" ]; then out "its checksum is not the recorded one"; fi
 }
 
+# --- The startup screens.
+# Only startup_N.boot files directly in the folder are handled there.
+startname() {
+	[ "$SKIN" = "startanim" ] || return 0
+	case "$1" in
+	*/*) return 1 ;;
+	startup_*.boot) return 0 ;;
+	esac
+	return 1
+}
+# The mount point of the file system that holds $1 (df -k's last field), empty when it can't be read.
+mountedon() {
+	df -k "$1" 2>/dev/null | tail -1 | awk '{ if (NF >= 2) print $NF }'
+}
+# Stops before anything is written unless /tsd/etc/startanim is on the file system mounted on /, the system
+# partition this script remounts. When df can't tell, the test write after the remount decides.
+startpart() {
+	if [ ! -d "$STARTANIM" ]; then
+		say "ERROR: $STARTANIM is not on this unit. Nothing was changed."
+		exit 1
+	fi
+	sm=$(mountedon "$STARTANIM")
+	r2=$(mountedon /)
+	if [ -z "$sm" ] || [ -z "$r2" ]; then
+		say "WARNING: could not read which file system holds $STARTANIM; the test write after the remount decides."
+		return 0
+	fi
+	if [ "$sm" != "$r2" ]; then
+		say ""
+		say "=================================================="
+		say "  $1 STOPPED: OTHER PARTITION"
+		say "  $STARTANIM is on the file system mounted on $sm,"
+		say "  not on $r2, the one this script makes writable."
+		say "  Nothing was copied. Send the log."
+		say "=================================================="
+		exit 1
+	fi
+	say "$STARTANIM is on the system partition ($sm)."
+}
+
 # --- Check: changes nothing on the unit.
 if [ "$MODE" = "check" ]; then
 	say "Read only: nothing on the unit is changed."
@@ -710,6 +790,12 @@ if [ "$MODE" = "check" ]; then
 	say "$(df -k / 2>&1 | tail -1)"
 	say "$(df -k /tsd 2>&1 | tail -1)"
 	say "startanim: $(df -k "$STARTANIM" 2>&1 | tail -1)"
+	sm=$(mountedon "$STARTANIM")
+	r2=$(mountedon /)
+	if [ -z "$sm" ] || [ -z "$r2" ]; then say "startanim's file system: unknown (startup would rely on its test write)"
+	elif [ "$sm" = "$r2" ]; then say "startanim's file system: $sm, the same as / (startup can write there)"
+	else say "WARNING: startanim is on $sm, not on $r2: startup and startuprestore would refuse to run"; fi
+	if [ -n "$HEADC" ]; then say "head -c for the SCRT header check: works"; else say "head -c for the SCRT header check: missing (that check is skipped)"; fi
 	say ""
 	if [ "$CARDS" -gt 1 ]; then
 		say "WARNING: $CARDS cards have mib2cfg ($CARDLIST ). Install, restore and menu refuse to run until only one is in."
@@ -725,10 +811,11 @@ if [ "$MODE" = "check" ]; then
 	fi
 	if [ -f "$PENDING" ]; then say "reboot pending: yes, reboot before the next install or restore"; else say "reboot pending: no"; fi
 	say ""
-	for s in $SKINS; do
-		useskin $s
+	for s in $SKINS startanim; do
+		useset $s
 		if [ "$s" != "skin0" ] && [ ! -d "$SRC" ]; then continue; fi
-		say "--- unit $s"
+		if [ "$s" = "startanim" ]; then what="startup"; else what="install"; fi
+		say "--- unit $s ($ROOT)"
 		if [ -d "$ROOT" ]; then
 			say "$ROOT is there"
 			say "$(ls -l "$ROOT" 2>&1)"
@@ -736,7 +823,8 @@ if [ "$MODE" = "check" ]; then
 			say "ERROR: $ROOT is missing"
 		fi
 		say ""
-		say "--- files install would replace (from mib2cfg/$s)"
+		say "--- files $what would replace (from mib2cfg/$s)"
+		[ "$s" = "startanim" ] && say "(if the unit's startup files were changed before, e.g. by the MIB STD2 Toolbox, put the factory files in mib2cfg/backup/startanim first)"
 		if [ -d "$SRC" ]; then
 			newlist "$SRC"
 			nl=$NL
@@ -745,6 +833,7 @@ if [ "$MODE" = "check" ]; then
 				dst=$ROOT/$rel
 				b=$BAK/$rel
 				case "$rel" in *" "*) say "SKIP   $PFX$rel (a space in the name: not supported)"; continue ;; esac
+				if ! startname "$rel"; then say "SKIP   $PFX$rel (only startup_N.boot files go there)"; continue; fi
 				if [ ! -f "$dst" ]; then
 					say "SKIP   $PFX$rel (not on the unit; names are case sensitive there)"
 					continue
@@ -812,7 +901,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 	exit 1
 fi
 HAVELOCK=1
-if [ "$MODE" = "install" ] || [ "$MODE" = "restore" ]; then
+if [ "$MODE" != "menu" ] && [ "$MODE" != "removemenu" ]; then
 	if [ -f "$PENDING" ]; then
 		say "ERROR: an earlier run replaced files and the unit has not rebooted since. Press Reboot unit first,"
 		say "then run this again (the HMI keeps the old files open until a reboot). Nothing was changed."
@@ -821,11 +910,12 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "restore" ]; then
 fi
 
 STEP=0
-if [ "$MODE" = "install" ]; then
+if [ "$MODE" = "install" ] || [ "$MODE" = "startup" ]; then
+	if [ -n "$STARTMODE" ]; then TITLE="STARTUP SCREENS INSTALL"; else TITLE=INSTALL; fi
 	COUNT=0
 	FOUND=""
-	for s in $SKINS; do
-		useskin $s
+	for s in $SETS; do
+		useset $s
 		[ -d "$SRC" ] || continue
 		FOUND=1
 		newlist "$SRC"
@@ -833,16 +923,18 @@ if [ "$MODE" = "install" ]; then
 		COUNT=$((COUNT + $(count "$nl")))
 	done
 	if [ -z "$FOUND" ]; then
-		say "ERROR: $CFG/skin0 is missing. Put the edited files there."
+		if [ -n "$STARTMODE" ]; then say "ERROR: $CFG/startanim is missing. Put the startup_N.boot files there."
+		else say "ERROR: $CFG/skin0 is missing. Put the edited files there."; fi
 		exit 1
 	fi
-	cardcheck INSTALL
+	cardcheck "$TITLE"
+	[ -n "$STARTMODE" ] && startpart "$TITLE"
 	cleanleftovers || exit 1
-	spacecheck INSTALL SRC
+	spacecheck "$TITLE" SRC
 	say ""
 	say "Installing $COUNT file(s). Keep the ignition on and the stick in until it says FINISHED."
-	for s in $SKINS; do
-		useskin $s
+	for s in $SETS; do
+		useset $s
 		[ -d "$SRC" ] || continue
 		[ -n "$STOP" ] && break
 		newlist "$SRC"
@@ -853,6 +945,7 @@ if [ "$MODE" = "install" ]; then
 			rel=${f#$SRC/}
 			dst=$ROOT/$rel
 			case "$rel" in *" "*) say "SKIP   $PFX$rel (a space in the name: not supported)"; continue ;; esac
+			if ! startname "$rel"; then say "SKIP   $PFX$rel (only startup_N.boot files go there)"; continue; fi
 			if [ ! -f "$dst" ]; then
 				say "SKIP   $PFX$rel (not on the unit; names are case sensitive there)"
 				continue
@@ -892,16 +985,17 @@ if [ "$MODE" = "install" ]; then
 				prepcard
 				if ! statemark "$s/$rel"; then FAILED=$((FAILED+1)); STOP=1; break; fi
 			fi
-			writable || { FAILED=$((FAILED+1)); break; }
+			writable "$ROOT" || { FAILED=$((FAILED+1)); break; }
 			put "$f" "$dst"
 			report $? "$PFX$rel" "Run restore."
 		done 3< "$nl"
 	done
-elif [ "$MODE" = "restore" ]; then
+elif [ "$MODE" = "restore" ] || [ "$MODE" = "startuprestore" ]; then
+	if [ -n "$STARTMODE" ]; then TITLE="STARTUP SCREENS RESTORE"; else TITLE=RESTORE; fi
 	COUNT=0
 	FOUND=""
-	for s in $SKINS; do
-		useskin $s
+	for s in $SETS; do
+		useset $s
 		[ -d "$BAK" ] || continue
 		FOUND=1
 		newlist "$BAK"
@@ -909,16 +1003,18 @@ elif [ "$MODE" = "restore" ]; then
 		COUNT=$((COUNT + $(count "$nl")))
 	done
 	if [ -z "$FOUND" ]; then
-		say "Nothing to restore: $CFG/backup/skin0 is missing."
+		if [ -n "$STARTMODE" ]; then say "Nothing to restore: $CFG/backup/startanim is missing."
+		else say "Nothing to restore: $CFG/backup/skin0 is missing."; fi
 		exit 3
 	fi
-	cardcheck RESTORE
+	cardcheck "$TITLE"
+	[ -n "$STARTMODE" ] && startpart "$TITLE"
 	cleanleftovers || exit 1
-	spacecheck RESTORE BAK
+	spacecheck "$TITLE" BAK
 	say ""
 	say "Restoring $COUNT original file(s). Keep the ignition on and the stick in until it says FINISHED."
-	for s in $SKINS; do
-		useskin $s
+	for s in $SETS; do
+		useset $s
 		[ -d "$BAK" ] || continue
 		[ -n "$STOP" ] && break
 		newlist "$BAK"
@@ -929,6 +1025,7 @@ elif [ "$MODE" = "restore" ]; then
 			rel=${b#$BAK/}
 			dst=$ROOT/$rel
 			case "$rel" in *" "*) say "SKIP   $PFX$rel (a space in the name: not supported)"; continue ;; esac
+			if ! startname "$rel"; then say "SKIP   $PFX$rel (only startup_N.boot files go there)"; continue; fi
 			if [ ! -f "$dst" ]; then
 				say "SKIP   $PFX$rel (not on the unit: restore never adds files)"
 				continue
@@ -947,7 +1044,7 @@ elif [ "$MODE" = "restore" ]; then
 				FAILED=$((FAILED+1))
 				continue
 			fi
-			writable || { FAILED=$((FAILED+1)); break; }
+			writable "$ROOT" || { FAILED=$((FAILED+1)); break; }
 			put "$b" "$dst"
 			report $? "$PFX$rel" "Try restore again."
 		done 3< "$nl"
@@ -1041,7 +1138,7 @@ fi
 # Read only again, checked; a partition that stays writable counts as an error.
 ro_again
 if [ -n "$RWEVER" ] && [ -z "$ROOK" ]; then FAILED=$((FAILED+1)); fi
-if [ $DONE -gt 0 ] && { [ "$MODE" = "install" ] || [ "$MODE" = "restore" ]; }; then
+if [ $DONE -gt 0 ] && [ "$MODE" != "menu" ] && [ "$MODE" != "removemenu" ]; then
 	touchfile "$PENDING"
 fi
 
@@ -1050,6 +1147,7 @@ fi
 NEXT=""
 if [ -n "$FROMFILE" ]; then
 	if [ "$MODE" = "install" ]; then NEXT=restore
+	elif [ "$MODE" = "startup" ]; then NEXT=startuprestore
 	elif [ $FAILED -eq 0 ]; then NEXT=check
 	else NEXT=$MODE; fi
 	out "$NEXT" > "$CFG/mode"
@@ -1058,6 +1156,8 @@ fi
 case $MODE in
 install) WHAT=INSTALL ;;
 restore) WHAT=RESTORE ;;
+startup) WHAT="STARTUP SCREENS INSTALL" ;;
+startuprestore) WHAT="STARTUP SCREENS RESTORE" ;;
 menu) WHAT="MENU INSTALL" ;;
 removemenu) WHAT="MENU REMOVAL" ;;
 *) WHAT=$MODE ;;
@@ -1065,8 +1165,8 @@ esac
 
 say ""
 say "$DONE file(s) changed, $FAILED error(s)."
-if [ "$NEXT" = "restore" ]; then
-	say "Tools route: the NEXT RUN RESTORES the original files (mib2cfg/mode now says restore)."
+if [ "$NEXT" = "restore" ] || [ "$NEXT" = "startuprestore" ]; then
+	say "Tools route: the NEXT RUN RESTORES the original files (mib2cfg/mode now says $NEXT)."
 elif [ "$NEXT" = "check" ]; then
 	say "Tools route: the next run only checks (mib2cfg/mode now says check)."
 fi
@@ -1076,6 +1176,8 @@ if [ $FAILED -gt 0 ]; then
 	say "  $WHAT FAILED: $FAILED error(s), see the lines above"
 	if [ "$MODE" = "install" ] && [ $DONE -gt 0 ]; then
 		say "  Press Restore original files, then Reboot unit."
+	elif [ "$MODE" = "startup" ] && [ $DONE -gt 0 ]; then
+		say "  Press Restore startup screens, then Reboot unit."
 	else
 		say "  Try again; the log is mib2cfg/log.txt"
 	fi
@@ -1109,7 +1211,7 @@ DOREBOOT=""
 if [ $RC -eq 0 ] && [ -n "$ROOK" ] && [ $DONE -gt 0 ]; then
 	touchfile "$OKMARK"
 	if [ -n "$REBOOT" ]; then
-		if [ "$MODE" = "install" ] || [ "$MODE" = "restore" ]; then DOREBOOT=1
+		if [ "$MODE" != "menu" ] && [ "$MODE" != "removemenu" ]; then DOREBOOT=1
 		else say "No reboot: $MODE doesn't need one (close and reopen the green menu)."; fi
 	fi
 elif [ -n "$REBOOT" ]; then
