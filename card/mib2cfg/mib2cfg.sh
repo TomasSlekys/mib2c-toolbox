@@ -49,6 +49,8 @@
 #             one on the unit is refused unless the mode is "menu force".
 # removemenu: deletes those files again (the screen disappears after reopening the green menu). The small marker
 #             mib2cfg.state stays: it says which card holds this unit's original files.
+# forgetcard: (no button: set mib2cfg/mode) sets that marker aside as mib2cfg.state.old, so a new card with a new
+#             backup can be used. Only when the old card's backups are lost or no longer wanted.
 # A second word "reboot" ("install reboot", "restore reboot", "startup reboot", "startuprestore reboot") restarts the unit at the end, but only when every
 # file was copied, nothing failed and the system partition is read only again.
 # Started without a mode the script sets the next one itself: after an install the next run restores (after a
@@ -179,9 +181,9 @@ reboot) REBOOT=1 ;;
 force) FORCE=1 ;;
 esac
 case "$MODE" in
-check|install|restore|startup|startuprestore|menu|removemenu) ;;
+check|install|restore|startup|startuprestore|menu|removemenu|forgetcard) ;;
 *)
-	out "ERROR: unknown mode '$MODE' (check, install, restore, startup, startuprestore, menu or removemenu). Nothing was changed."
+	out "ERROR: unknown mode '$MODE' (check, install, restore, startup, startuprestore, menu, removemenu or forgetcard). Nothing was changed."
 	exit 1
 	;;
 esac
@@ -341,9 +343,28 @@ cleanup() {
 	trap - EXIT HUP INT TERM 2>/dev/null
 	ro_again
 	[ -n "$LISTS" ] && rm -f $LISTS
-	[ -n "$HAVELOCK" ] && rmdir "$LOCK" 2>/dev/null
+	LISTS=""
+	[ -n "$HAVELOCK" ] && rm -rf "$LOCK" 2>/dev/null
 	HAVELOCK=""
 	sync
+}
+# Takes the run lock: a folder in /tmp (cleared by a reboot) holding this run's process id. A lock whose process
+# is gone (a run that was killed) is stale and taken over.
+takelock() {
+	if mkdir "$LOCK" 2>/dev/null; then
+		out $$ > "$LOCK/pid"
+		HAVELOCK=1
+		return 0
+	fi
+	lp=$(head -1 "$LOCK/pid" 2>/dev/null)
+	case "$lp" in ''|*[!0-9]*) lp="" ;; esac
+	if [ -n "$lp" ] && kill -0 "$lp" 2>/dev/null; then return 1; fi
+	say "NOTE: an old lock ${lp:+of process $lp }was left by a run that is gone; taking it over."
+	rm -rf "$LOCK"
+	mkdir "$LOCK" 2>/dev/null || return 1
+	out $$ > "$LOCK/pid"
+	HAVELOCK=1
+	return 0
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -565,6 +586,7 @@ invalid() {
 	vf=$1
 	vd=$2
 	vrel=$3
+	vnoskin=$4
 	vn=$(size "$vf")
 	vo=$(size "$vd")
 	if [ "$vn" -eq 0 ]; then out "the new file is empty"; return; fi
@@ -587,12 +609,23 @@ invalid() {
 		fi
 		;;
 	esac
+	[ -n "$vnoskin" ] && return
+	[ "$SKIN" = "startanim" ] && return
+	# The same file as another skin's on the unit: dropped into the wrong skinN folder. Not when both skins had the
+	# same original (the same picture edited for both themes): their originals are compared (backup or unit file).
+	vorig=$BAKROOT/$SKIN/$vrel
+	[ -f "$vorig" ] || vorig=$vd
 	for s2 in $SKINS; do
 		[ "$s2" = "$SKIN" ] && continue
 		u=$RES/$s2/$vrel
 		[ -f "$u" ] || continue
 		[ "$(size "$u")" -eq "$vn" ] || continue
-		if same "$vf" "$u"; then out "it is the same file as $s2's on the unit (wrong skin folder?)"; return; fi
+		same "$vf" "$u" || continue
+		uorig=$BAKROOT/$s2/$vrel
+		[ -f "$uorig" ] || uorig=$u
+		same "$vorig" "$uorig" && continue
+		out "it is the same file as $s2's on the unit (wrong skin folder?)"
+		return
 	done
 }
 
@@ -612,6 +645,20 @@ statecard() {
 statehas() {
 	[ -f "$STATE" ] && awk -v p="file $1" '$0 == p {f = 1} END {exit !f}' "$STATE"
 }
+statefw() {
+	[ -f "$STATE" ] && sed -n 's/^firmware //p' "$STATE" | head -1
+}
+# Sets the unit's marker aside as mib2cfg.state.old (kept for the logs); the next backup starts a new one.
+setaside() {
+	[ -f "$STATE" ] || return 0
+	writable "$ESD" || return 1
+	if mv -f "$STATE" "$STATE.old"; then
+		say "the unit's marker was set aside as ${STATE##*/}.old"
+		return 0
+	fi
+	say "ERROR  could not set the unit's marker aside"
+	return 1
+}
 # Rewrites the marker on the unit as the lines in temp file $1 (copied next to it, compared and renamed).
 statewrite() {
 	writable "$ESD" || return 1
@@ -627,6 +674,8 @@ statemark() {
 	LISTS="$LISTS $sn"
 	{
 		out "card $(cardid)"
+		fp=$(fingerprint)
+		out "firmware ${fp:-unknown}"
 		[ -f "$STATE" ] && grep '^file ' "$STATE"
 		out "file $1"
 	} > "$sn"
@@ -635,9 +684,13 @@ statemark() {
 # Makes sure this card has an id and the firmware fingerprint before its first backup.
 prepcard() {
 	mkdir -p "$BAKROOT" 2>/dev/null
-	if [ ! -f "$CARDIDFILE" ]; then
-		out "c$RANDOM$RANDOM$$" > "$CARDIDFILE"
+	if [ ! -s "$CARDIDFILE" ]; then
+		{ out "c$RANDOM$RANDOM$$" > "$CARDIDFILE"; } 2>/dev/null
 		sync
+		if [ -z "$(cardid)" ]; then
+			say "ERROR  could not write this card's id ($CARDIDFILE)"
+			return 1
+		fi
 		say "this card's backup id: $(cardid)"
 	fi
 	if [ ! -f "$UNITFILE" ]; then
@@ -645,9 +698,17 @@ prepcard() {
 		out "${fp:-unknown}" > "$UNITFILE"
 		sync
 	fi
+	return 0
 }
 # Stops the run (before copying) when this card's backups belong to another card or firmware.
 cardcheck() {
+	# A marker written on other firmware (the unit was updated since) no longer means anything: set it aside.
+	sf=$(statefw)
+	fnow=$(fingerprint)
+	if [ -n "$sf" ] && [ "$sf" != "unknown" ] && [ -n "$fnow" ] && [ "$sf" != "$fnow" ]; then
+		say "NOTE: the unit's marker was written on other firmware (updated since?); this run starts fresh."
+		setaside || exit 1
+	fi
 	sc=$(statecard)
 	cid=$(cardid)
 	if [ -n "$sc" ] && [ "$sc" != "$cid" ]; then
@@ -669,9 +730,10 @@ cardcheck() {
 			say ""
 			say "=================================================="
 			say "  $1 STOPPED: OTHER FIRMWARE"
-			say "  The backups on this card were made on other firmware than the unit runs now."
-			say "  Move mib2cfg/backup to a PC (keep it) and start with an empty backup folder."
-			say "  Nothing was copied."
+			say "  The backups on this card were made on other firmware than the unit runs now,"
+			say "  so they are not this firmware's original files."
+			say "  Move the folder mib2cfg/backup to a PC (keep it), then run this again:"
+			say "  a new backup of the new firmware's files is made. Nothing was copied."
 			say "=================================================="
 			exit 1
 		fi
@@ -694,6 +756,10 @@ backupfile() {
 	out "$3 $(size "$2") $(sum "$2")" >> "$MANIFEST"
 	sync
 	same "$1" "$2"
+}
+# True when MANIFEST records backup $1.
+inmanifest() {
+	[ -f "$MANIFEST" ] && awk -v p="$1" '$1 == p {f = 1} END {exit !f}' "$MANIFEST"
 }
 # Checks backup $1 (recorded as $2) against MANIFEST; prints the problem, empty when fine or not recorded.
 manifestbad() {
@@ -755,28 +821,44 @@ if [ "$MODE" = "check" ]; then
 	say "shell: $SHELL $KSH_VERSION; ksh: $(command -v ksh 2>&1)"
 	say "PATH: $PATH"
 	say "id: $(id 2>&1); pwd: $(pwd 2>&1)"
+	# Each self-test prints "ok" or "BAD:" (what it got and what it wants); send the log when any says BAD.
+	selftest() {
+		if [ "$2" = "$3" ]; then say "ok   $1: $2"; else say "BAD: $1: got '$2', want '$3'"; fi
+	}
 	t=/a/b/c.gca
 	n=3
 	n=$((n+1))
-	say "parameter expansion (want /a/b and c.gca): ${t%/*} and ${t##*/}"
-	say "arithmetic (want 4): $n; leading zero 0012+1 (want 13): $(( $(out 0012 | sed 's/^0*//') + 1 ))"
-	say "sed y (want restore): $(lower ReStore)"
-	say "print: $( (print -r -- 'a\tb') 2>&1 ) (want a\\tb)"
-	say "typeset -Z4 (want 0012): $( (typeset -Z4 z=12; out "$z") 2>&1 )"
-	say "trap EXIT (want trap-ok): $( (trap 'out trap-ok' EXIT; exit 0) 2>&1 )"
+	selftest "parameter expansion" "${t%/*} ${t##*/}" "/a/b c.gca"
+	selftest "arithmetic" "$n" "4"
+	selftest "leading zero 0012+1" "$(( $(out 0012 | sed 's/^0*//') + 1 ))" "13"
+	selftest "sed y" "$(lower ReStore)" "restore"
+	selftest "print -r" "$(out 'a\tb')" 'a\tb'
+	say "info typeset -Z4 (not used by the installer; 0012 on pdksh): $( (typeset -Z4 z=12; out "$z") 2>&1 )"
+	selftest "trap EXIT" "$( (trap 'out trap-ok' EXIT; exit 0) 2>&1 )" "trap-ok"
+	selftest "awk -v" "$(awk -v p=ok 'BEGIN {print p}' 2>&1)" "ok"
+	selftest "pad4" "$(pad4 7)" "0007"
+	if same "$CFG/../mib2cfg/mib2cfg.sh" "$CFG/mib2cfg.sh"; then r=same; else r=differ; fi
+	selftest "cmp on identical files" "$r" "same"
+	if same "$CFG/mib2cfg.sh" "$RUNLOG"; then r=same; else r=differ; fi
+	selftest "cmp on different files" "$r" "differ"
+	selftest "cmp reports a position" "$( [ -n "$(firstdiff "$CFG/mib2cfg.sh" "$RUNLOG")" ] && out yes || out no)" "yes"
+	ct=$( (touchfile "$LOGDIR/.mib2cfg-t" && rm -f "$LOGDIR/.mib2cfg-t" && out yes) 2>&1 )
+	selftest "a failed write doesn't end the script" "$( (touchfile /nonexistent-dir/x; out alive) 2>&1 )" "alive"
+	selftest "card writable" "$ct" "yes"
 	pw=0
 	out a | while read x; do pw=1; done
-	say "pipe into while keeps variables (0 on pdksh, mksh): $pw"
-	if same "$CFG/../mib2cfg/mib2cfg.sh" "$CFG/mib2cfg.sh"; then say "cmp on identical files: same (good)"; else say "cmp on identical files: NOT same (bad)"; fi
-	if same "$CFG/mib2cfg.sh" "$RUNLOG"; then say "cmp on different files: same (bad)"; else say "cmp on different files: differ (good)"; fi
-	say "cmp's report format: $(cmp "$CFG/mib2cfg.sh" "$RUNLOG" 2>&1 | head -1)"
+	say "info pipe into while keeps variables (0 on pdksh and mksh, the script doesn't rely on it): $pw"
+	say "info cmp's report format: $(cmp "$CFG/mib2cfg.sh" "$RUNLOG" 2>&1 | head -1)"
 	say ""
-	say "--- commands"
-	for c in find cmp cp mv chmod rm kill sleep mkdir rmdir sed awk head tail grep ls df mount sync cksum od tr id slay; do
-		say "$c: $(command -v $c 2>&1)"
+	say "--- commands (BAD: missing = the installer can't work; info = optional)"
+	for c in find cmp cp mv chmod rm kill sleep mkdir rmdir sed awk head tail grep ls df mount sync; do
+		w=$(command -v $c 2>/dev/null)
+		if [ -n "$w" ]; then say "ok   $c: $w"; else say "BAD: $c: missing"; fi
 	done
-	say "head -c: $(out abc | head -c 1 2>&1)"
-	say "awk -v (want ok): $(awk -v p=ok 'BEGIN {print p}' 2>&1)"
+	for c in cksum od tr id slay; do
+		say "info $c: $(command -v $c 2>/dev/null || out 'missing (optional)')"
+	done
+	if [ -n "$HEADC" ]; then say "ok   head -c: works (SCRT header check on)"; else say "info head -c: missing (the SCRT header check is skipped)"; fi
 	say ""
 	say "--- environment"
 	el="$TMPD/mib2cfg.env.$$"
@@ -795,7 +877,6 @@ if [ "$MODE" = "check" ]; then
 	if [ -z "$sm" ] || [ -z "$r2" ]; then say "startanim's file system: unknown (startup would rely on its test write)"
 	elif [ "$sm" = "$r2" ]; then say "startanim's file system: $sm, the same as / (startup can write there)"
 	else say "WARNING: startanim is on $sm, not on $r2: startup and startuprestore would refuse to run"; fi
-	if [ -n "$HEADC" ]; then say "head -c for the SCRT header check: works"; else say "head -c for the SCRT header check: missing (that check is skipped)"; fi
 	say ""
 	if [ "$CARDS" -gt 1 ]; then
 		say "WARNING: $CARDS cards have mib2cfg ($CARDLIST ). Install, restore and menu refuse to run until only one is in."
@@ -805,6 +886,8 @@ if [ "$MODE" = "check" ]; then
 	say "this card's id: $(cardid)"
 	sc=$(statecard)
 	say "unit marker: ${sc:-none}"
+	sf=$(statefw)
+	if [ -n "$sf" ] && [ "$sf" != "$(fingerprint)" ]; then say "WARNING: the unit's marker was written on other firmware; the next install or restore sets it aside"; fi
 	if [ -n "$sc" ] && [ "$sc" != "$(cardid)" ]; then say "WARNING: the unit's originals are on another card ($sc)"; fi
 	if [ -f "$UNITFILE" ]; then
 		if [ "$(head -1 "$UNITFILE")" = "$(fingerprint)" ]; then say "firmware: same as when the backups were made"; else say "WARNING: firmware differs from when the backups were made"; fi
@@ -868,6 +951,13 @@ if [ "$MODE" = "check" ]; then
 	sfree=$(freekb "$CFG")
 	say "unit: install needs $((NEEDUNIT / 1024)) MB, $(freetext "$free")"
 	say "stick: backups and logs need $((NEEDSTICK / 1024)) MB, $(freetext "$sfree")"
+	if [ -d "$CFG/startanim" ]; then
+		SETS=startanim
+		needed SRC
+		SETS=$SKINS
+		say "unit: startup needs $((NEEDUNIT / 1024)) MB, $(freetext "$(freekb "$STARTANIM")")"
+		say "stick: startup backups and logs need $((NEEDSTICK / 1024)) MB"
+	fi
 	say ""
 	say "--- leftover copies from interrupted runs (install and restore remove them)"
 	l=$(leftovers)
@@ -887,7 +977,8 @@ if [ "$MODE" = "check" ]; then
 		say "$(find /tsd -type f -name "$name" 2>/dev/null | grep "/$car/")"
 	done 3< "$gl"
 	say ""
-	say "Check finished. Send mib2cfg/log.txt (or the newest file in mib2cfg/logs)."
+	say "Check finished. Look for BAD and WARNING above; if there are any, send the newest"
+	say "mib2cfg/logs/NNNN-check.log (the highest number)."
 	exit 0
 fi
 
@@ -896,15 +987,17 @@ if [ "$CARDS" -gt 1 ]; then
 	say "ERROR: $CARDS cards with mib2cfg are in ($CARDLIST ). Take out all but one and try again. Nothing was changed."
 	exit 1
 fi
-if ! mkdir "$LOCK" 2>/dev/null; then
-	say "ERROR: another MIB2 Configurator run is still busy (or one was cut off: reboot the unit). Nothing was changed."
+if ! takelock; then
+	say "ERROR: another MIB2 Configurator run is still busy. Wait for FINISHED and try again. Nothing was changed."
 	exit 1
 fi
-HAVELOCK=1
-if [ "$MODE" != "menu" ] && [ "$MODE" != "removemenu" ]; then
+# Install and startup wait for a reboot after an earlier run replaced files; restores never do (a failed install
+# must always be undoable), their space check reads the free space as it is now.
+if [ "$MODE" = "install" ] || [ "$MODE" = "startup" ]; then
 	if [ -f "$PENDING" ]; then
 		say "ERROR: an earlier run replaced files and the unit has not rebooted since. Press Reboot unit first,"
-		say "then run this again (the HMI keeps the old files open until a reboot). Nothing was changed."
+		say "then install again (the HMI keeps the old files open until a reboot). Restore works without a reboot."
+		say "Nothing was changed."
 		exit 1
 	fi
 fi
@@ -971,7 +1064,7 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "startup" ]; then
 					FAILED=$((FAILED+1))
 					continue
 				fi
-				prepcard
+				if ! prepcard; then FAILED=$((FAILED+1)); STOP=1; break; fi
 				say "       backing up the unit's ${rel##*/} to the stick..."
 				if ! backupfile "$dst" "$b" "$s/$rel"; then
 					say "ERROR  $PFX$rel: could not back up the original; left as it was"
@@ -980,10 +1073,25 @@ if [ "$MODE" = "install" ] || [ "$MODE" = "startup" ]; then
 				fi
 				say "backup $PFX$rel"
 				if ! statemark "$s/$rel"; then FAILED=$((FAILED+1)); STOP=1; break; fi
-			elif ! statehas "$s/$rel"; then
-				# A backup from an older version (or a marker without this file): record it.
-				prepcard
-				if ! statemark "$s/$rel"; then FAILED=$((FAILED+1)); STOP=1; break; fi
+			else
+				# A backup this script didn't make (placed by hand, or from an older version): it must look like the
+				# unit's kind of file before it is trusted as the original; then it is recorded.
+				if ! inmanifest "$s/$rel"; then
+					bwhy=$(invalid "$b" "$dst" "$rel" noskin)
+					if [ -n "$bwhy" ]; then
+						say "ERROR  $PFX$rel: the backup on the card (placed by hand?) is not plausible: $bwhy."
+						say "       Not replaced: without a good original there would be no way back."
+						FAILED=$((FAILED+1))
+						continue
+					fi
+					out "$s/$rel $(size "$b") $(sum "$b")" >> "$MANIFEST"
+					sync
+					say "       the backup on the card (not made by this script) looks right; recorded"
+				fi
+				if ! statehas "$s/$rel"; then
+					if ! prepcard; then FAILED=$((FAILED+1)); STOP=1; break; fi
+					if ! statemark "$s/$rel"; then FAILED=$((FAILED+1)); STOP=1; break; fi
+				fi
 			fi
 			writable "$ROOT" || { FAILED=$((FAILED+1)); break; }
 			put "$f" "$dst"
@@ -1039,6 +1147,7 @@ elif [ "$MODE" = "restore" ] || [ "$MODE" = "startuprestore" ]; then
 			fi
 			bad=$(manifestbad "$b" "$s/$rel")
 			if [ -z "$bad" ] && [ "$(size "$b")" -eq 0 ]; then bad="it is empty"; fi
+			if [ -z "$bad" ]; then bad=$(invalid "$b" "$dst" "$rel" noskin); fi
 			if [ -n "$bad" ]; then
 				say "ERROR  $PFX$rel: the backup is damaged ($bad); not restored, the unit's file is unchanged"
 				FAILED=$((FAILED+1))
@@ -1094,8 +1203,14 @@ elif [ "$MODE" = "menu" ]; then
 			rel=${f#$MENU/}
 			dst=$ESD/$rel
 			if [ ! -d "${dst%/*}" ]; then
-				say "SKIP   $rel (${dst%/*} is not on the unit)"
-				continue
+				if writable "$ESD"; then mkdir -p "${dst%/*}" 2>/dev/null; fi
+				if [ ! -d "${dst%/*}" ]; then
+					say "ERROR  $rel: ${dst%/*} is not on the unit and could not be made"
+					FAILED=$((FAILED+1))
+					SCRIPTFAILED=1
+					continue
+				fi
+				say "made ${dst%/*}"
 			fi
 			if same "$f" "$dst"; then
 				say "same   $rel"
@@ -1118,6 +1233,13 @@ elif [ "$MODE" = "menu" ]; then
 			if [ -f "$f" ]; then say "ERROR  ${f#$ESD/}: could not delete the old file"; FAILED=$((FAILED+1)); else say "removed ${f#$ESD/} (no longer on the card)"; DONE=$((DONE+1)); fi
 		done
 	fi
+elif [ "$MODE" = "forgetcard" ]; then
+	if [ -f "$STATE" ]; then
+		say "The unit's marker says its original files are backed up on the card $(statecard)."
+		if setaside; then DONE=1; else FAILED=$((FAILED+1)); fi
+	else
+		say "The unit has no marker; nothing to forget."
+	fi
 elif [ "$MODE" = "removemenu" ]; then
 	# Only our own files: the screen and the button scripts this script installed. The marker stays.
 	for f in "$ESD"/mib2cfg*.esd "$ESD"/scripts/mib2cfg_*.sh; do
@@ -1138,9 +1260,9 @@ fi
 # Read only again, checked; a partition that stays writable counts as an error.
 ro_again
 if [ -n "$RWEVER" ] && [ -z "$ROOK" ]; then FAILED=$((FAILED+1)); fi
-if [ $DONE -gt 0 ] && [ "$MODE" != "menu" ] && [ "$MODE" != "removemenu" ]; then
-	touchfile "$PENDING"
-fi
+case "$MODE" in
+install|restore|startup|startuprestore) [ $DONE -gt 0 ] && touchfile "$PENDING" ;;
+esac
 
 # Tools route only: the next run undoes this one. After any install (also a failed one) it restores; after a clean
 # restore or menu install it only checks; a restore or menu install with errors stays as it is, to be retried.
@@ -1160,6 +1282,7 @@ startup) WHAT="STARTUP SCREENS INSTALL" ;;
 startuprestore) WHAT="STARTUP SCREENS RESTORE" ;;
 menu) WHAT="MENU INSTALL" ;;
 removemenu) WHAT="MENU REMOVAL" ;;
+forgetcard) WHAT="FORGET CARD" ;;
 *) WHAT=$MODE ;;
 esac
 
@@ -1186,6 +1309,10 @@ elif [ $DONE -gt 0 ] && [ "$MODE" = "removemenu" ]; then
 	say "  $WHAT FINISHED: $DONE file(s) removed"
 	say "  Close and reopen the green menu."
 	RC=0
+elif [ $DONE -gt 0 ] && [ "$MODE" = "forgetcard" ]; then
+	say "  $WHAT FINISHED: the marker is set aside"
+	say "  The next install makes a new backup on this card."
+	RC=0
 elif [ $DONE -gt 0 ] && [ "$MODE" = "menu" ]; then
 	say "  $WHAT FINISHED"
 	say "  Close and reopen the green menu:"
@@ -1211,15 +1338,22 @@ DOREBOOT=""
 if [ $RC -eq 0 ] && [ -n "$ROOK" ] && [ $DONE -gt 0 ]; then
 	touchfile "$OKMARK"
 	if [ -n "$REBOOT" ]; then
-		if [ "$MODE" != "menu" ] && [ "$MODE" != "removemenu" ]; then DOREBOOT=1
-		else say "No reboot: $MODE doesn't need one (close and reopen the green menu)."; fi
+		case "$MODE" in
+		install|restore|startup|startuprestore) [ -f "$OKMARK" ] && DOREBOOT=1 ;;
+		esac
+		if [ -z "$DOREBOOT" ]; then say "No reboot: $MODE doesn't need one."; fi
 	fi
 elif [ -n "$REBOOT" ]; then
 	say "No reboot: the run did not finish cleanly with files copied."
 fi
 if [ -n "$DOREBOOT" ]; then
 	say "Rebooting in 10 seconds..."
-	cleanup
+	# Read only again and the temp lists gone, but the run lock stays until the unit is down: Reboot unit and
+	# other buttons wait for it (a reboot clears /tmp, and with it the lock).
+	ro_again
+	[ -n "$LISTS" ] && rm -f $LISTS
+	LISTS=""
+	sync
 	sleep 10
 	sync
 	slay tsd.mibstd2.system.swdownload 2>/dev/null
