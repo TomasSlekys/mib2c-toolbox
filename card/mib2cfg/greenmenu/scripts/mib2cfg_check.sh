@@ -1,5 +1,5 @@
 #!/bin/ksh
-# mib2cfg-version 0.3.0
+# mib2cfg-version 0.4.0
 # MIB2 Configurator button: runs mib2cfg/mib2cfg.sh check from the SD card or USB stick.
 for i in /media/mp00*; do
 	if [ -f $i/mib2cfg/mib2cfg.sh ]; then

@@ -1,5 +1,5 @@
 #!/bin/ksh
-# mib2cfg-version 0.3.0
+# mib2cfg-version 0.4.0
 # MIB2 Configurator button: restarts the unit (works without the SD card or stick).
 # The same steps as the MIB STD2 Toolbox's reboot: write everything out, stop the software download
 # service, then shut down (the unit starts again by itself). Refused while an install or restore is still

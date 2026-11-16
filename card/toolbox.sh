@@ -1,5 +1,5 @@
 #!/bin/ksh
-# mib2cfg-version 0.3.0
+# mib2cfg-version 0.4.0
 # MIB2 Configurator launcher for the MIB STD2 Toolbox: Tools > "Run toolbox.sh script from the root of the Toolbox drive".
 # Runs mib2cfg/mib2cfg.sh from this drive; the mode comes from mib2cfg/mode (check if there is none).
 for i in /media/mp00*; do
