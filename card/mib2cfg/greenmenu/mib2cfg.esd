@@ -7,6 +7,7 @@
 # Main -> MIB2 Configurator
 #
 ###########################################################################################
+# mib2cfg-version 0.3.0
 screen MIB2_Configurator Main
 
 keyValue
