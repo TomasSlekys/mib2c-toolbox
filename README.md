@@ -1,7 +1,7 @@
 # mib2c-toolbox
 
-Installs skin files edited with the [MIB2 Configurator](https://mib2c.pqisa.eu) on a **VW MIB2 Standard (PQ/ZR)**
-head unit, and puts the unit's original files back.
+Installs skin files and startup screens edited with the [MIB2 Configurator](https://mib2c.pqisa.eu) on a
+**VW MIB2 Standard (PQ/ZR)** head unit, and puts the unit's original files back.
 
 Unlike the toolbox's Customization › Skins, it also installs the car data files under `Data/` (ambient light points,
 touch areas), so moved zones and points arrive too. Besides `skin0` it installs the theme skins `skin1` … `skin6`
@@ -10,10 +10,15 @@ touch areas), so moved zones and points arrive too. Besides `skin0` it installs 
 It adds its own screen to the Green Engineering Menu, **Main › MIB2 Configurator**:
 
 - **Check (read only):** shows what would change.
-- **Install edited files.**
-- **Restore original files.**
+- **Install edited files**, and **Install edited files and reboot**.
+- **Restore original files**, and **Restore original files and reboot**.
+- **Install startup screens**, **Install startup screens and reboot**, **Restore startup screens**.
 - **Reboot unit.**
+- **Update this menu from the card.**
 - **Remove this menu from the unit.**
+
+The "… and reboot" buttons restart the unit only when the run finished cleanly: files were copied, nothing failed
+and the system partition is read only again. Otherwise they stop with the message and don't reboot.
 
 > Community tool, not affiliated with Volkswagen. Use it at your own risk and keep your own dump of the unit.
 > Only tested on a VW MIB2 STD2 PQ unit with firmware 0480T (QNX 6.5). Other units and firmware versions are untested.
@@ -39,15 +44,18 @@ mib2cfg/skin0/              YOUR EDITED FILES, at their place in skin0, for exam
 mib2cfg/skin1/ … skin6/     your edited files for the theme skins, at their place in that skin, for example:
                               mib2cfg/skin3/images.mcf
                               mib2cfg/skin1/images.res
+mib2cfg/startanim/          YOUR EDITED STARTUP SCREENS: startup_N.boot files, for example
+                              mib2cfg/startanim/startup_0.boot
 ```
 
-The release zip has `mib2cfg/skin0` … `mib2cfg/skin6` empty, ready for your files; when you copy from the
+The release zip has `mib2cfg/skin0` … `mib2cfg/skin6` and `mib2cfg/startanim` empty, ready for your files; when you copy from the
 repository, create them yourself (only the ones you use are needed). Empty skin folders are skipped. The installer
 writes these:
 
 ```
 mib2cfg/backup/skin0/ …     the unit's own files, saved before they are first replaced, one folder per skin
   backup/skin6/               (skin0 … skin6). Keep them, and copy them to a PC after the first install!
+mib2cfg/backup/startanim/   the unit's own startup screens, saved the same way
 mib2cfg/backup/MANIFEST     size (and checksum) of every backup; restore checks each backup against it
 mib2cfg/backup/card.id      this card's id; the unit remembers which card holds its original files
 mib2cfg/backup/unit.txt     the unit's firmware fingerprint from when the first backup was made
@@ -71,8 +79,23 @@ theme, edit it in each theme's `images.mcf`.
    the root of the Toolbox drive". Wait for **MENU INSTALL FINISHED**.
 3. Close and reopen the green menu. The main list now has a **MIB2 Configurator** screen.
 
-The menu install adds only six files named `mib2cfg*` to the unit's green menu folder and changes nothing else.
-From then on the screen works by itself, from any card or stick that has the `mib2cfg` folder.
+The menu install adds only files named `mib2cfg*` to the unit's green menu folder (the screen and its eleven
+button scripts, a few KB) and changes nothing else. From then on the screen works by itself, from any card or
+stick that has the `mib2cfg` folder.
+
+**After a menu install or update, press Check once** and send the log (`mib2cfg/logs/0001-check.log`) if
+anything says "bad", "missing" or WARNING: the installer is tested off the unit with mksh and busybox sh, and Check
+confirms the unit's own shell (PD KSH 5.2.14) and commands behave the same.
+
+## Updating the menu
+
+When a newer release adds or changes buttons, put the new files on the card and press **Update this menu from
+the card**, then close and reopen the green menu. It checks the menu files first (Unix line endings, the
+`#!/bin/ksh` line, the screen line), installs the button scripts before the screen, removes our button scripts the
+card no longer has, and refuses to put an older menu over a newer one. Check shows both versions.
+
+A unit with a menu older than 0.4.0 doesn't have this button yet: install the menu once more the first-time way
+(`mib2cfg/mode` = `menu`, Toolbox › Tools › Run toolbox.sh). From then on the button does it.
 
 ## Installing edited files
 
@@ -81,6 +104,9 @@ From then on the screen works by itself, from any card or stick that has the `mi
 2. Optional: Green menu › MIB2 Configurator › **Check (read only)** shows what would change.
 3. Press **Install edited files**. It shows a progress bar; wait for **INSTALL FINISHED**.
 4. Press **Reboot unit**, and look at the screens only after the reboot.
+
+Or press **Install edited files and reboot**: the same install, then the unit restarts by itself about 10 seconds
+after **INSTALL FINISHED**, but only after a clean run.
 
 Don't switch off or reboot while it copies. Even if that happens, the unit's file stays whole: every file is
 copied next to the original, checked, and only then swapped in.
@@ -93,11 +119,36 @@ If your unit already runs an edited file, put the factory original from a dump i
 Press **Restore original files**, wait for **RESTORE FINISHED**, then press **Reboot unit**. It copies the files
 from `mib2cfg/backup/skin0` … `skin6` back, so use the card that holds the backup folder from your first install.
 
-**Remove this menu from the unit** deletes the screen's six files again.
+**Remove this menu from the unit** deletes the screen and its button scripts again.
+
+## Startup screens
+
+The unit plays its startup animation from `/tsd/etc/startanim/startup_N.boot`. Edit them in the MIB2 Configurator
+(open a folder that holds `skins` and `startanim`), then:
+
+1. Copy the `startup_N.boot` files you changed into `mib2cfg/startanim/` on the card (directly in that folder).
+2. Optional: **Check** lists them under "files startup would replace".
+3. Press **Install startup screens** (or **Install startup screens and reboot**). Only files that already exist on
+   the unit are replaced; other names are skipped. Each new file must start with `SCRT` and be between half and
+   double the size of the unit's file.
+4. Reboot to see them. **Restore startup screens** puts the unit's own files back from `mib2cfg/backup/startanim`.
+
+Skin and startup backups are separate: Restore original files never touches the startup screens, and Restore
+startup screens never touches the skins.
+
+**If the unit's startup screens were changed before** (for example with the MIB STD2 Toolbox's own startup
+animations), the backup would save those, not the factory files. Then put the factory `startup_N.boot` files from
+a dump into `mib2cfg/backup/startanim/` before the first install.
+
+The startup folder has to be on the system partition the installer makes writable. Check shows it ("startanim's
+file system"); if it isn't, the startup buttons stop with "OTHER PARTITION" before anything is written.
+
+A broken startup file could stop the unit before the HMI starts, so the green menu couldn't be reached to restore
+it. Read the next section before the first startup install.
 
 ## How it works
 
-- **Install** goes through `mib2cfg/skin0` … `skin6` in turn and replaces only files that already exist in the
+- **Install** (and **startup**, for `mib2cfg/startanim`) goes through `mib2cfg/skin0` … `skin6` in turn and replaces only files that already exist in the
   unit's matching skin (nothing is added or deleted), and only when they differ.
 - **Every new file is checked first** and refused (the unit's file stays) when it is empty, when an `images.mcf`,
   `images.res` or `.boot` file doesn't start like the unit's file, when an `images.mcf` or `.boot` file is less
@@ -135,10 +186,12 @@ from `mib2cfg/backup/skin0` … `skin6` back, so use the card that holds the bac
   and the marker `mib2cfg.state` (kept on purpose). Backups and logs go to the card, never the unit. A copy left by a
   power cut mid-copy is listed by Check and removed by the next install, restore or menu run.
 - `toolbox.sh` runs the installer with the mode in `mib2cfg/mode`: `check` (the default, also for an empty file),
-  `install`, `restore`, `menu` or `removemenu`. When started this way, the installer sets the next mode itself:
-  after an install the next run restores, and after a clean restore or menu change it only checks. The menu
+  `install`, `restore`, `startup`, `startuprestore`, `menu` or `removemenu`. When started this way, the installer
+  sets the next mode itself: after an install the next run restores (after `startup`: `startuprestore`), and after
+  a clean restore or menu change it only checks. The menu
   buttons always do what they say and leave `mib2cfg/mode` alone.
-- **Reboot when finished:** `mib2cfg.sh install reboot` (or `restore reboot`) restarts the unit at the end, but only
+- **Reboot when finished:** `mib2cfg.sh install reboot` (or `restore reboot`, `startup reboot`,
+  `startuprestore reboot`; the "… and reboot" buttons) restarts the unit at the end, but only
   when files were copied, nothing failed and the partition is read only again. Exit codes: 0 changed cleanly,
   1 stopped before copying, 2 some files failed, 3 nothing needed changing.
 
@@ -156,7 +209,10 @@ the green menu (and with it Restore) can't be reached either. Before your first 
 `tests/run.sh` runs the installer against a fake unit and card in Docker (mksh, the closest relative of the
 unit's PD KSH; `tests/run.sh busybox` uses busybox sh). The cases cover install, restore, reboot rules, the file
 checks, names with spaces, mode files with CR/BOM, two cards, a read-only card, mount failures, low space, the
-lock, leftovers, partial / damaged backups, another card or firmware, the menu install and the log numbering.
+lock, leftovers, partial / damaged backups, another card or firmware, the menu install and update (older menu
+updated, downgrade and CRLF refused, every button script present), every "… and reboot" path (reboots only after a
+clean, changed run), the startup screens (install, restore, skipped names, wrong header and size refused, leftovers,
+another partition, separate backups) and the log numbering.
 Check on the unit then confirms the pdksh details (`print`, `typeset -Z`, `trap EXIT`, `awk -v`, cmp's format).
 
 ## License

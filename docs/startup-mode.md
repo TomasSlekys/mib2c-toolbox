@@ -1,4 +1,4 @@
-# Design note: the startup screens mode (not built yet)
+# Design note: the startup screens mode (built in 0.4.0)
 
 The planned `startup` / `startuprestore` modes install and restore the unit's startup animations,
 `/tsd/etc/startanim/startup_N.boot`, from `mib2cfg/startanim/` on the card. Points from the 2026-11 reviews to
@@ -19,3 +19,17 @@ build in:
 - **Plumbing:** a `usestart()` beside `useskin()` (ROOT=$STARTANIM, SRC=$CFG/startanim, BAK=$BAKROOT/startanim);
   `leftovers()` already searches `$STARTANIM`; the marker records `file startanim/<name>`.
 - **Reboot:** `startup reboot` reboots only after a clean run, like install.
+
+## Status in 0.4.0
+
+Built as described: modes `startup` / `startuprestore` (plus `reboot`), `usestart()` / `useset()`, backups in
+`backup/startanim/` with MANIFEST entries and marker lines `file startanim/<name>`, only existing `startup_*.boot`
+files directly in the folder, the `SCRT` header check (when `head -c` works on the unit; Check says) and the
+half-to-double size check, leftovers in `/tsd/etc/startanim`, `freekb "$STARTANIM"`, and a stop ("OTHER
+PARTITION") when df shows the folder on another file system than `/`. Still open:
+
+- **Picture counts:** a stricter check against the unit file's picture count, once the format is confirmed on the
+  unit.
+- **The toolbox's own backup:** the installer doesn't look for olli991's startanim backup on the card; the README
+  tells the user to supply factory files instead.
+- **The `.expect` sidecar** (expected sizes written by the web app) isn't read yet.
