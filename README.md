@@ -47,8 +47,12 @@ writes these:
 
 ```
 mib2cfg/backup/skin0/ …     the unit's own files, saved before they are first replaced, one folder per skin
-  backup/skin6/               (skin0 … skin6). Keep them!
-mib2cfg/log.txt             what the last run did
+  backup/skin6/               (skin0 … skin6). Keep them, and copy them to a PC after the first install!
+mib2cfg/backup/MANIFEST     size (and checksum) of every backup; restore checks each backup against it
+mib2cfg/backup/card.id      this card's id; the unit remembers which card holds its original files
+mib2cfg/backup/unit.txt     the unit's firmware fingerprint from when the first backup was made
+mib2cfg/logs/0001-check.log one log per run, numbered, never overwritten (send these when something goes wrong)
+mib2cfg/log.txt             a copy of the last run's log
 ```
 
 ### Theme skins
@@ -94,26 +98,66 @@ from `mib2cfg/backup/skin0` … `skin6` back, so use the card that holds the bac
 ## How it works
 
 - **Install** goes through `mib2cfg/skin0` … `skin6` in turn and replaces only files that already exist in the
-  unit's matching skin (nothing is added or deleted), and only when they differ. Before a file is first replaced,
-  its original is copied to `mib2cfg/backup/skinN` (the same skin) and compared. That
-  copy is never overwritten, so it stays the unit's own file however often you install.
-- **Restore** copies every backed-up file back. The backup stays on the card.
-- Each file is copied next to its target as `<name>.mib2cfg-new`, compared, renamed over the target and compared
-  again. The system partition is remounted read-write only for the copy and read-only again afterwards.
+  unit's matching skin (nothing is added or deleted), and only when they differ.
+- **Every new file is checked first** and refused (the unit's file stays) when it is empty, when an `images.mcf`,
+  `images.res` or `.boot` file doesn't start like the unit's file, when an `images.mcf` or `.boot` file is less
+  than half or more than double the unit's size, or when it is byte for byte another skin's file on the unit
+  (dropped into the wrong `skinN` folder).
+- **Backups:** before a file is first replaced, its original is copied to `mib2cfg/backup/skinN` as a `.part`
+  file, compared, renamed, flushed to the card, made read only and recorded in `MANIFEST`. A power cut leaves at
+  most a `.part`, which is ignored and redone. A backup is never overwritten, so it stays the unit's own file
+  however often you install.
+- **One card per unit:** the unit keeps a small marker, `mib2cfg.state` next to the green menu files, with the id
+  of the card that holds its originals and the files backed up. A different card is refused ("WRONG CARD"), and so
+  is a file whose original the marker says was backed up but this card doesn't have: otherwise an edited file
+  could become the "original". With more than one card or stick holding `mib2cfg` in the unit, nothing is
+  written. Backups made on other firmware are refused too ("OTHER FIRMWARE"): keep that backup folder on a PC and
+  start with an empty one.
+- **Restore** copies every backed-up file back, after checking it against `MANIFEST`, and only over files that
+  exist on the unit (it never adds files). The backup stays on the card.
+- Each file is copied next to its target as `<name>.mib2cfg-new.<run>`, compared, renamed over the target and
+  compared again. The system partition is remounted read-write only for the copy, after checking that `/` is
+  `/dev/hd0t177` and that it really became writable, and read-only again afterwards (also when the run stops
+  early); a partition that stays writable is reported as an error.
 - **Space:** before copying anything, install and restore work out what they need and stop with "NOT ENOUGH
-  SPACE" (nothing copied) when the unit or, for the backups, the card is short. The unit needs the largest file
-  once more (the copy next to its target) plus whatever the new files are bigger than the old ones, plus 4 MB.
-  If the free space can't be read, it goes on with a warning: a copy that doesn't fit is removed and the unit's
-  file kept.
+  SPACE" (nothing copied) when the unit or, for the backups, the card is short. The HMI keeps a replaced
+  `images.mcf` open until the reboot, so the unit needs room for every new file plus the largest once more, plus
+  16 MB.
+- **One run at a time, then reboot:** a second button press while a run is busy is refused, and so is Reboot
+  unit. After an install or restore that replaced files, the next install or restore waits for a reboot.
+- **Logs:** every run writes `mib2cfg/logs/NNNN-<mode>.log` (the next free number; nothing is overwritten) and a
+  copy in `log.txt`. A card that can't be written stops the run before the unit is touched.
+- **Menu:** the menu install checks the menu files first (Unix line endings, `#!/bin/ksh`, the screen line),
+  installs the button scripts and then the screen, removes our button scripts the card no longer has, and refuses
+  to put an older menu over a newer one (mode `menu force` does it anyway). Check shows both menu versions.
 - **Nothing left behind:** the only files that stay on the unit are the replaced files themselves (same names,
-  same places) and the menu's own files (`mib2cfg.esd` and `scripts/mib2cfg_*.sh` in the green menu folder,
-  a few KB; Remove menu deletes them). Backups go to the card, never the unit. A failed copy is deleted at once;
-  a `<name>.mib2cfg-new` left by a power cut mid-copy is listed by Check and removed by the next install or
-  restore. Check also shows the free space and what an install would need.
-- `toolbox.sh` runs the installer with the mode in `mib2cfg/mode`: `check` (the default), `install`, `restore`,
-  `menu` or `removemenu`. When started this way, the installer sets the next mode itself: after an install the
-  next run restores, and after a clean restore or menu change it only checks. The menu buttons always do what
-  they say and leave `mib2cfg/mode` alone.
+  same places), the menu's own files (`mib2cfg.esd` and `scripts/mib2cfg_*.sh`, a few KB; Remove menu deletes them)
+  and the marker `mib2cfg.state` (kept on purpose). Backups and logs go to the card, never the unit. A copy left by a
+  power cut mid-copy is listed by Check and removed by the next install, restore or menu run.
+- `toolbox.sh` runs the installer with the mode in `mib2cfg/mode`: `check` (the default, also for an empty file),
+  `install`, `restore`, `menu` or `removemenu`. When started this way, the installer sets the next mode itself:
+  after an install the next run restores, and after a clean restore or menu change it only checks. The menu
+  buttons always do what they say and leave `mib2cfg/mode` alone.
+- **Reboot when finished:** `mib2cfg.sh install reboot` (or `restore reboot`) restarts the unit at the end, but only
+  when files were copied, nothing failed and the partition is read only again. Exit codes: 0 changed cleanly,
+  1 stopped before copying, 2 some files failed, 3 nothing needed changing.
+
+## If the unit doesn't start properly after an install
+
+The checks above catch the usual mistakes, but a file the HMI can't read can still stop it from starting, and then
+the green menu (and with it Restore) can't be reached either. Before your first install:
+
+- keep a full dump of the unit, and copy `mib2cfg/backup` to a PC after the first install;
+- know your way back without the HMI (the unit's serial console, or a firmware update from SD), or have someone
+  who does.
+
+## Testing off the unit
+
+`tests/run.sh` runs the installer against a fake unit and card in Docker (mksh, the closest relative of the
+unit's PD KSH; `tests/run.sh busybox` uses busybox sh). The cases cover install, restore, reboot rules, the file
+checks, names with spaces, mode files with CR/BOM, two cards, a read-only card, mount failures, low space, the
+lock, leftovers, partial / damaged backups, another card or firmware, the menu install and the log numbering.
+Check on the unit then confirms the pdksh details (`print`, `typeset -Z`, `trap EXIT`, `awk -v`, cmp's format).
 
 ## License
 
