@@ -160,7 +160,7 @@ ok "refused file left the unit alone" '! cmp -s $U/Resources/skin0/images.mcf $U
 setup space
 edit0
 chmod -R u+w "$U"; printf 'q' > "$U/Resources/skin0/Data/x/a b.gca"; chmod -R a-w "$U"
-printf 'r' > "$C/mib2cfg/skin0/Data/x/a b.gca" 2>/dev/null || { mkdir -p "$C/mib2cfg/skin0/Data/x"; printf 'r' > "$C/mib2cfg/skin0/Data/x/a b.gca"; }
+mkdir -p "$C/mib2cfg/skin0/Data/x"; printf 'r' > "$C/mib2cfg/skin0/Data/x/a b.gca"
 run install
 ok "a name with a space is skipped whole" 'grepq "SKIP   Data/x/a b.gca (a space"'
 ok "the other file still installed" '[ $RC -eq 0 ]'
@@ -217,9 +217,14 @@ ok "low space: stopped" '[ $RC -eq 1 ] && grepq "NOT ENOUGH SPACE"'
 ok "low space: read only" '! isrw'
 setup locked
 edit0
-mkdir "$T/tmp/mib2cfg.lock"
+mkdir "$T/tmp/mib2cfg.lock"; echo $$ > "$T/tmp/mib2cfg.lock/pid"
 run install
-ok "busy lock: refused and the lock kept" '[ $RC -eq 1 ] && [ -d $T/tmp/mib2cfg.lock ]'
+ok "busy lock (live process): refused and the lock kept" '[ $RC -eq 1 ] && [ -d $T/tmp/mib2cfg.lock ] && grepq "still busy"'
+setup stalelock
+edit0
+mkdir "$T/tmp/mib2cfg.lock"; echo 999999 > "$T/tmp/mib2cfg.lock/pid"
+run install
+ok "stale lock (process gone): taken over" '[ $RC -eq 0 ] && grepq "old lock of process 999999" && [ ! -d $T/tmp/mib2cfg.lock ]'
 
 # --- backups: partial, wrong card, other firmware, damaged
 setup partial
@@ -229,11 +234,13 @@ run install
 ok "partial backup ignored and redone" '[ $RC -eq 0 ] && cmp -s $C/mib2cfg/backup/skin0/images.mcf $T/orig0 && [ ! -f $C/mib2cfg/backup/skin0/images.mcf.part ]'
 setup wrongcard
 edit0
-chmod -R u+w "$U"; printf 'card cOTHER\nfile skin0/images.mcf\n' > "$U/esd/mib2cfg.state"; chmod -R a-w "$U"
+run install
+reboot_sim
+chmod -R u+w "$U"; sed -i 's/^card .*/card cOTHER/' "$U/esd/mib2cfg.state"; chmod -R a-w "$U"
 run install
 ok "unit marker of another card: install refused" '[ $RC -eq 1 ] && grepq "WRONG CARD"'
 run restore
-ok "unit marker of another card: restore refused" '[ $RC -ne 0 ]'
+ok "unit marker of another card: restore refused with WRONG CARD" '[ $RC -eq 1 ] && grepq "WRONG CARD" && cmp -s $C/mib2cfg/skin0/images.mcf $U/Resources/skin0/images.mcf'
 setup firmware
 edit0
 run install
@@ -394,6 +401,121 @@ sa startup_0.boot new0
 run install
 run startup
 ok "startup after an install waits for the reboot" '[ $RC -eq 1 ] && grepq "has not rebooted"'
+
+# --- review round 2: restore after a failed install, hand-placed backups, firmware updates, locks, big files
+setup partialrestore
+edit0
+mkdir -p "$C/mib2cfg/skin1"; : > "$C/mib2cfg/skin1/images.mcf"
+run install
+ok "partial install: one copied, one refused (2)" '[ $RC -eq 2 ] && [ -f $T/tmp/mib2cfg.reboot-pending ]'
+run restore
+ok "restore works right after a partly failed install (no reboot needed)" '[ $RC -eq 0 ] && cmp -s $T/orig0 $U/Resources/skin0/images.mcf'
+run install
+ok "install still waits for the reboot" '[ $RC -eq 1 ] && grepq "has not rebooted"'
+
+setup handbackup
+mkdir -p "$C/mib2cfg/startanim" "$C/mib2cfg/backup/startanim"
+boot "$(pad new0)" > "$C/mib2cfg/startanim/startup_0.boot"
+printf 'junkjunkjunk' > "$C/mib2cfg/backup/startanim/startup_0.boot"
+run startup
+ok "hand-placed junk backup: install refused, unit file kept" '[ $RC -eq 2 ] && grepq "not plausible" && cmp -s $T/origsa0 $U/startanim/startup_0.boot'
+run startuprestore
+ok "hand-placed junk backup: never restored" '[ $RC -eq 2 ] && grepq "backup is damaged" && cmp -s $T/origsa0 $U/startanim/startup_0.boot'
+setup handbackupgood
+mkdir -p "$C/mib2cfg/startanim" "$C/mib2cfg/backup/startanim"
+boot "$(pad new0)" > "$C/mib2cfg/startanim/startup_0.boot"
+boot "$(pad fac0)" > "$C/mib2cfg/backup/startanim/startup_0.boot"
+run startup
+ok "hand-placed factory backup: accepted and recorded" '[ $RC -eq 0 ] && grep -q "^startanim/startup_0.boot " $C/mib2cfg/backup/MANIFEST && grepq "looks right; recorded"'
+reboot_sim
+run startuprestore
+ok "hand-placed factory backup: restored" '[ $RC -eq 0 ] && [ "$(cat $U/startanim/startup_0.boot)" = "$(boot "$(pad fac0)")" ]'
+
+setup fwupdate
+edit0
+run install
+reboot_sim
+chmod -R u+w "$U"; printf 'firmware-two' > "$U/hmi/tsd.mibstd2.hmi.ifs"; cp "$T/orig0" "$U/Resources/skin0/images.mcf"; chmod -R a-w "$U"
+run install
+ok "firmware update: stopped, marker set aside" '[ $RC -eq 1 ] && grepq "OTHER FIRMWARE" && [ -f $U/esd/mib2cfg.state.old ] && [ ! -f $U/esd/mib2cfg.state ]'
+mv "$C/mib2cfg/backup" "$T/backup-kept"
+run install
+ok "firmware update: after moving the backup away, install starts fresh" '[ $RC -eq 0 ] && grepq "backup id" && ! grepq "WRONG CARD" && grep -q "^firmware " $U/esd/mib2cfg.state'
+
+setup forget
+edit0
+run install
+reboot_sim
+rm -rf "$C/mib2cfg/backup"
+run install
+ok "lost backups without forgetcard: refused" '[ $RC -ne 0 ] && [ $RC -ne 3 ]'
+run forgetcard
+ok "forgetcard sets the marker aside" '[ $RC -eq 0 ] && [ -f $U/esd/mib2cfg.state.old ] && grepq "FORGET CARD FINISHED"'
+run install
+ok "after forgetcard install runs (fresh backup)" '[ $RC -eq 3 ] || [ $RC -eq 0 ]'
+
+setup rebootlock
+edit0
+printf '#!/bin/sh\nif [ -d %s/tmp/mib2cfg.lock ]; then echo "$1 locked" >> %s/sleep.log; else echo "$1 free" >> %s/sleep.log; fi\n' "$T" "$T" "$T" > "$T/stub/sleep"
+chmod +x "$T/stub/sleep"
+run install reboot
+ok "the lock is held during the reboot wait" 'grep -q "^10 locked" $T/sleep.log && [ -f $T/shutdown-called ] && ! isrw'
+
+setup okmark
+edit0
+run install
+ok "ok marker present after a clean run" '[ -f $T/tmp/mib2cfg.ok ]'
+
+setup bigfile
+chmod -R u+w "$U"
+{ printf '\211MCF\r\n\032\n'; head -c 9437184 /dev/zero; } > "$U/Resources/skin0/images.mcf"
+chmod -R a-w "$U"
+{ printf '\211MCF\r\n\032\n'; head -c 9437184 /dev/zero | tr '\000' 'n'; } > "$C/mib2cfg/skin0/images.mcf"
+run install
+ok "a file over 8 MB: background copy with progress, installed" '[ $RC -eq 0 ] && grepq "100%" && cmp -s $C/mib2cfg/skin0/images.mcf $U/Resources/skin0/images.mcf'
+
+setup rebootbutton
+mkdir "$T/tmp/mib2cfg.lock"; echo $$ > "$T/tmp/mib2cfg.lock/pid"
+RB() { ( env PATH="$T/stub:$PATH" MIB2CFG_TMP="$T/tmp" MIB2CFG_SHUTDOWN=shutdown $RUN /repo/card/mib2cfg/greenmenu/scripts/mib2cfg_reboot.sh ) > "$T/out" 2>&1; }
+RB
+ok "Reboot unit: refused while a live run holds the lock" 'grepq "Not now" && [ ! -f $T/shutdown-called ]'
+echo 999999 > "$T/tmp/mib2cfg.lock/pid"
+RB
+ok "Reboot unit: a stale lock doesn't block it" 'grepq "old lock" && [ -f $T/shutdown-called ]'
+rm -rf "$T/tmp/mib2cfg.lock"; rm -f "$T/shutdown-called"
+RB
+ok "Reboot unit: reboots without a lock" '[ -f $T/shutdown-called ]'
+
+setup concurrent
+edit0
+printf '#!/bin/sh\n/bin/sleep 0.3\nexec /bin/cp "$@"\n' > "$T/stub/cp"; chmod +x "$T/stub/cp"
+runto() { ( cd / && env PATH="$T/stub:$PATH" MIB2CFG_RESOURCES="$U/Resources" MIB2CFG_ESD="$U/esd" MIB2CFG_STARTANIM="$U/startanim" \
+	MIB2CFG_HMI="$U/hmi" MIB2CFG_MEDIA="$T/media/mp00*" MIB2CFG_TMP="$T/tmp" MIB2CFG_SHUTDOWN=shutdown \
+	$RUN "$C/mib2cfg/mib2cfg.sh" install > "$T/out$1" 2>&1; echo $? > "$T/rc$1" ); }
+runto 1 & runto 2 & wait
+ok "two writing runs at once: exactly one installs" '[ "$(cat $T/rc1)$(cat $T/rc2)" = 01 ] || [ "$(cat $T/rc1)$(cat $T/rc2)" = 10 ]'
+ok "two writing runs at once: the other is refused (busy or reboot first)" 'cat $T/out1 $T/out2 | grep -q -e "still busy" -e "has not rebooted"'
+ok "two writing runs at once: file right, no leftovers, lock gone" 'cmp -s $C/mib2cfg/skin0/images.mcf $U/Resources/skin0/images.mcf && [ -z "$(find $U -name "*.mib2cfg-new*")" ] && [ ! -d $T/tmp/mib2cfg.lock ]'
+
+setup menunoscripts
+chmod -R u+w "$U"; rm -rf "$U/esd/scripts"; chmod -R a-w "$U"
+run menu
+ok "menu: a missing scripts folder is made, all buttons installed" '[ $RC -eq 0 ] && [ -x $U/esd/scripts/mib2cfg_install.sh ] && [ -f $U/esd/mib2cfg.esd ]'
+
+setup checkgate
+edit0
+mkdir -p "$C/mib2cfg/startanim"
+run check
+ok "check: no BAD lines in a good environment" '! grepq "^BAD:"'
+ok "check: says to send the newest check log" 'grepq "newest"'
+ok "check: covers the startup space" 'grepq "startup needs"'
+
+setup sameorig
+mkdir -p "$C/mib2cfg/skin2"
+chmod -R u+w "$U"; mkdir -p "$U/Resources/skin2"; cp "$U/Resources/skin1/images.mcf" "$U/Resources/skin2/images.mcf"; chmod -R a-w "$U"
+mkdir -p "$C/mib2cfg/skin1"; mcf "$(pad edited1)" > "$C/mib2cfg/skin1/images.mcf"; cp "$C/mib2cfg/skin1/images.mcf" "$C/mib2cfg/skin2/images.mcf"
+run install
+ok "same edit for two themes with the same original: both installed" '[ $RC -eq 0 ] && cmp -s $C/mib2cfg/skin2/images.mcf $U/Resources/skin2/images.mcf && ! grepq "wrong skin folder"'
 
 echo "$SH: $PASS passed, $FAILS failed"
 [ $FAILS -eq 0 ]
