@@ -80,12 +80,15 @@ theme, edit it in each theme's `images.mcf`.
 3. Close and reopen the green menu. The main list now has a **MIB2 Configurator** screen.
 
 The menu install adds only files named `mib2cfg*` to the unit's green menu folder (the screen and its eleven
-button scripts, a few KB) and changes nothing else. From then on the screen works by itself, from any card or
-stick that has the `mib2cfg` folder.
+button scripts, a few KB) and changes nothing else. From then on the screen works by itself from a card or stick
+with the `mib2cfg` folder: for install and restore, always the same card (the one holding the backups, see "One
+card per unit" below), and only one such card in the unit at a time.
 
-**After a menu install or update, press Check once** and send the log (`mib2cfg/logs/0001-check.log`) if
-anything says "bad", "missing" or WARNING: the installer is tested off the unit with mksh and busybox sh, and Check
-confirms the unit's own shell (PD KSH 5.2.14) and commands behave the same.
+**After a menu install or update, press Check once** before the first install. Every self-test line says `ok`
+or `BAD:`; a needed command that is missing says `BAD: … missing`. If any line says **BAD** or **WARNING**, don't
+install: send the newest check log (`mib2cfg/logs/NNNN-check.log` with the highest number). The installer is
+tested off the unit with mksh and busybox sh, and Check confirms the unit's own shell (PD KSH 5.2.14) and commands
+behave the same.
 
 ## Updating the menu
 
@@ -113,6 +116,8 @@ copied next to the original, checked, and only then swapped in.
 
 If your unit already runs an edited file, put the factory original from a dump into `mib2cfg/backup/skin0` (or
 `backup/skinN` for a theme skin) before the first install. Otherwise Restore would bring back the edited file.
+A backup placed by hand is checked before it is trusted (not empty, the same kind of file as the unit's, half to
+double its size); if it fails, that file is not installed.
 
 ## Going back
 
@@ -151,9 +156,10 @@ it. Read the next section before the first startup install.
 - **Install** (and **startup**, for `mib2cfg/startanim`) goes through `mib2cfg/skin0` … `skin6` in turn and replaces only files that already exist in the
   unit's matching skin (nothing is added or deleted), and only when they differ.
 - **Every new file is checked first** and refused (the unit's file stays) when it is empty, when an `images.mcf`,
-  `images.res` or `.boot` file doesn't start like the unit's file, when an `images.mcf` or `.boot` file is less
-  than half or more than double the unit's size, or when it is byte for byte another skin's file on the unit
-  (dropped into the wrong `skinN` folder).
+  `images.res` or `.boot` file doesn't start like the unit's file (a `.boot` must start with `SCRT`), when an
+  `images.mcf` or `.boot` file is less than half or more than double the unit's size, or when it is byte for byte
+  another skin's file on the unit (dropped into the wrong `skinN` folder). That last check is skipped when both
+  skins had the same original file, so the same edit can go into several themes.
 - **Backups:** before a file is first replaced, its original is copied to `mib2cfg/backup/skinN` as a `.part`
   file, compared, renamed, flushed to the card, made read only and recorded in `MANIFEST`. A power cut leaves at
   most a `.part`, which is ignored and redone. A backup is never overwritten, so it stays the unit's own file
@@ -162,10 +168,14 @@ it. Read the next section before the first startup install.
   of the card that holds its originals and the files backed up. A different card is refused ("WRONG CARD"), and so
   is a file whose original the marker says was backed up but this card doesn't have: otherwise an edited file
   could become the "original". With more than one card or stick holding `mib2cfg` in the unit, nothing is
-  written. Backups made on other firmware are refused too ("OTHER FIRMWARE"): keep that backup folder on a PC and
-  start with an empty one.
-- **Restore** copies every backed-up file back, after checking it against `MANIFEST`, and only over files that
-  exist on the unit (it never adds files). The backup stays on the card.
+  written. The marker also records the firmware: after a firmware update an old marker is set aside
+  (`mib2cfg.state.old`) and the run starts fresh. Backups made on other firmware are refused ("OTHER FIRMWARE")
+  because they aren't this firmware's originals: move `mib2cfg/backup` to a PC (keep it) and run again; a new
+  backup is made. If the card with the backups is lost, set `mib2cfg/mode` to `forgetcard` and run toolbox.sh
+  once: the marker is set aside and the next install backs up the unit's current files as its originals.
+- **Restore** copies every backed-up file back, after checking it against `MANIFEST` and checking that it looks
+  like the unit's kind of file, and only over files that exist on the unit (it never adds files). The backup stays
+  on the card. Restore never waits for a reboot, so a failed install can always be undone at once.
 - Each file is copied next to its target as `<name>.mib2cfg-new.<run>`, compared, renamed over the target and
   compared again. The system partition is remounted read-write only for the copy, after checking that `/` is
   `/dev/hd0t177` and that it really became writable, and read-only again afterwards (also when the run stops
@@ -175,7 +185,9 @@ it. Read the next section before the first startup install.
   `images.mcf` open until the reboot, so the unit needs room for every new file plus the largest once more, plus
   16 MB.
 - **One run at a time, then reboot:** a second button press while a run is busy is refused, and so is Reboot
-  unit. After an install or restore that replaced files, the next install or restore waits for a reboot.
+  unit, also during the 10 seconds before an "… and reboot" restart. The lock (in `/tmp`, cleared by a reboot)
+  holds the run's process id, so a lock left by a run that was killed doesn't block anything. After an install
+  that replaced files, the next install waits for a reboot; restore doesn't.
 - **Logs:** every run writes `mib2cfg/logs/NNNN-<mode>.log` (the next free number; nothing is overwritten) and a
   copy in `log.txt`. A card that can't be written stops the run before the unit is touched.
 - **Menu:** the menu install checks the menu files first (Unix line endings, `#!/bin/ksh`, the screen line),
@@ -186,7 +198,7 @@ it. Read the next section before the first startup install.
   and the marker `mib2cfg.state` (kept on purpose). Backups and logs go to the card, never the unit. A copy left by a
   power cut mid-copy is listed by Check and removed by the next install, restore or menu run.
 - `toolbox.sh` runs the installer with the mode in `mib2cfg/mode`: `check` (the default, also for an empty file),
-  `install`, `restore`, `startup`, `startuprestore`, `menu` or `removemenu`. When started this way, the installer
+  `install`, `restore`, `startup`, `startuprestore`, `menu`, `removemenu` or `forgetcard`. When started this way, the installer
   sets the next mode itself: after an install the next run restores (after `startup`: `startuprestore`), and after
   a clean restore or menu change it only checks. The menu
   buttons always do what they say and leave `mib2cfg/mode` alone.
@@ -212,7 +224,13 @@ checks, names with spaces, mode files with CR/BOM, two cards, a read-only card, 
 lock, leftovers, partial / damaged backups, another card or firmware, the menu install and update (older menu
 updated, downgrade and CRLF refused, every button script present), every "… and reboot" path (reboots only after a
 clean, changed run), the startup screens (install, restore, skipped names, wrong header and size refused, leftovers,
-another partition, separate backups) and the log numbering.
+another partition, separate backups), restore right after a partly failed install, hand-placed backups (junk
+refused, a good one recorded), a firmware update past the stop, forgetcard, the lock held through the reboot wait,
+stale and live locks (also for the Reboot unit button), two writing runs at once, a file over 8 MB (the copy with
+a progress bar), Check's self-tests and the log numbering.
+
+**Pending:** the unit's own shell, PD KSH 5.2.14, hasn't been run off the unit; running a pdksh 5.2.14 binary in
+the tests waits for the maintainer's OK. Until then Check on the car is the confirmation.
 Check on the unit then confirms the pdksh details (`print`, `typeset -Z`, `trap EXIT`, `awk -v`, cmp's format).
 
 ## License

@@ -33,3 +33,4 @@ PARTITION") when df shows the folder on another file system than `/`. Still open
 - **The toolbox's own backup:** the installer doesn't look for olli991's startanim backup on the card; the README
   tells the user to supply factory files instead.
 - **The `.expect` sidecar** (expected sizes written by the web app) isn't read yet.
+- **pdksh 5.2.14** itself isn't run in the tests yet (waits for the maintainer's OK); Check on the car confirms it.
