@@ -151,6 +151,87 @@ file system"); if it isn't, the startup buttons stop with "OTHER PARTITION" befo
 A broken startup file could stop the unit before the HMI starts, so the green menu couldn't be reached to restore
 it. Read the next section before the first startup install.
 
+## If the unit doesn't start after a startup screen change
+
+The startup screens play before the HMI starts. If a `startup_N.boot` file stops the unit at that point, the
+screen stays dark: the green menu, and with it **Restore startup screens**, can't be reached. The only way back
+then is a shell on the unit from outside. Prepare it **before** the first startup install.
+
+Items marked **(verify)** are not covered by this toolbox's scripts and haven't been tested here. Check them in
+the olli991 MIB STD2 PQ/ZR Toolbox documentation or with the community before you rely on them.
+
+### Before you test
+
+1. **Turn on remote access in the olli991 toolbox:** its telnet service and/or its serial console service.
+   (verify: the exact menu path in the toolbox's green menu screens.)
+   - **Telnet** needs a USB-to-Ethernet adapter the unit supports, a network cable to a PC, and the unit's IP
+     address and login. (verify: which adapters work, the IP, user and password, from the olli991 toolbox docs.)
+   - **Serial** needs the unit's debug serial connection and a matching USB-to-serial adapter. (verify: the
+     connector and pinout, the voltage level, and the baud rate. Don't guess them: a wrong connection can damage
+     the unit.)
+2. **Test that you can log in while everything still works.** You should get a shell prompt and be able to run,
+   for example, `ls /tsd/etc/startanim` and `ls -d /media/mp00*`. If you can't log in now, you won't be able to
+   when the screen is dark.
+3. **Keep the card with `mib2cfg/backup/`.** After the first startup install, `mib2cfg/backup/startanim/` holds
+   the unit's own `startup_N.boot` files, and `mib2cfg/backup/MANIFEST` their sizes and checksums. Copy the
+   `backup` folder to a PC too. Without that card, the recovery below has nothing to copy back.
+4. **Do the first test with an unchanged repack.** Open the startup screens in the MIB2 Configurator, save one
+   without changing it, and install that. If the unit starts normally, the save-and-install path works on your
+   unit before any real edit goes in.
+5. **Change one file at a time.** Install one `startup_N.boot`, reboot, check it. Then you know which file to
+   put back if something goes wrong.
+
+### Recovery with telnet or serial access
+
+Log in while the unit is (re)starting with the card that holds `mib2cfg/backup/startanim` in the unit. Then run
+these commands. They are the same steps `mib2cfg.sh startuprestore` takes: it remounts the system partition
+`/dev/hd0t177` read-write, copies the backup over the unit's file, checks it, flushes, and remounts read-only.
+Replace `startup_0.boot` with the file you changed (or run the `cp` and `cmp` lines for each one).
+
+```sh
+# 1. Find the card. mib2cfg.sh looks at /media/mp00* and uses the one with mib2cfg/mib2cfg.sh.
+ls -d /media/mp00*/mib2cfg/backup/startanim
+CARD=/media/mp000          # set to the folder the line above printed, without /mib2cfg/...
+ls -l $CARD/mib2cfg/backup/startanim/
+grep startanim $CARD/mib2cfg/backup/MANIFEST   # name, size in bytes, cksum: the sizes must match ls -l
+
+# 2. Check that / is the system partition the installer uses, and that startanim is on it.
+mount | grep ' on / '      # must show /dev/hd0t177
+df -k /tsd/etc/startanim   # must show the same file system as: df -k /
+
+# 3. Make it writable, put the original back, check it.
+mount -t qnx6 -o remount,rw /dev/hd0t177 /
+cp $CARD/mib2cfg/backup/startanim/startup_0.boot /tsd/etc/startanim/startup_0.boot
+cmp $CARD/mib2cfg/backup/startanim/startup_0.boot /tsd/etc/startanim/startup_0.boot && echo SAME
+
+# 4. Flush, read only again, restart.
+sync
+mount -t qnx6 -o remount,ro /dev/hd0t177 /
+sync
+slay tsd.mibstd2.system.swdownload
+/bin/shutdown
+```
+
+- Run `cmp` until it prints `SAME` before going on. If `cp` or `cmp` fails, don't reboot. Try again, or send the
+  output to the community first.
+- `mib2cfg.sh` copies to a temporary name and renames it over the target, so a power cut never leaves half a file.
+  A plain `cp` over the file doesn't have that protection: keep the ignition on until `sync` has finished.
+- The last two lines are what the **Reboot unit** button runs (`/bin/shutdown` restarts the unit).
+- (verify) Whether the card is mounted under `/media/mp00*` while the HMI hasn't started. If `ls -d` finds
+  nothing, ask the community how to mount the SD card or USB stick from the shell on your firmware.
+- (verify) How long after power-on the telnet or serial login is available, and whether a unit stuck at startup
+  restarts in a loop.
+- Once the unit starts again, press **Check** in the MIB2 Configurator screen. The startup screens should show as
+  `backup = the unit's file`.
+
+### Recovery without remote access
+
+If telnet or serial access wasn't set up and tested beforehand, there is no known way back through this toolbox.
+The unit may need a workshop (dealer or a specialist with tools for MIB2 units) or a firmware re-flash. Whether a
+re-flash from SD card is possible on a unit that doesn't start, and which package it would need, is not known
+here (verify with the community). Keep the card with `mib2cfg/backup/` and the logs (`mib2cfg/logs/`): whoever
+repairs the unit will need the original `startup_N.boot` files.
+
 ## How it works
 
 - **Install** (and **startup**, for `mib2cfg/startanim`) goes through `mib2cfg/skin0` … `skin6` in turn and replaces only files that already exist in the
@@ -215,6 +296,8 @@ the green menu (and with it Restore) can't be reached either. Before your first 
 - keep a full dump of the unit, and copy `mib2cfg/backup` to a PC after the first install;
 - know your way back without the HMI (the unit's serial console, or a firmware update from SD), or have someone
   who does.
+
+For the startup screens, see "If the unit doesn't start after a startup screen change" above.
 
 ## Testing off the unit
 
